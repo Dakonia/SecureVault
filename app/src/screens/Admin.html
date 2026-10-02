@@ -1,0 +1,68 @@
+<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:var(--bg)">
+
+  <header style="height:60px;flex-shrink:0;box-sizing:border-box;padding:0 24px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px">
+    <a href="Director.dc.html" style="display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"></path></svg>Назад</a>
+    <span style="color:var(--muted-2)">/</span><span style="font-size:15px;font-weight:800">Настройки</span>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+      <a href="AdminLight.dc.html" aria-label="Сменить тему" style="width:38px;height:38px;border-radius:10px;border:1px solid var(--border);color:var(--muted);display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></a>
+      <div style="display:flex;align-items:center;gap:9px"><div style="width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px">Д7</div><div><div style="font-size:12px;font-weight:700;line-height:1.1">Директор №7</div><div style="font-size:10.5px;color:var(--muted-2)">Гороховая</div></div></div>
+    </div>
+  </header>
+
+  <div style="flex-grow:1;box-sizing:border-box;padding:24px;overflow:hidden">
+    <p style="margin:0 0 18px;font-size:13px;color:var(--muted-2)">Личные настройки. Роли и права — у мастер-аккаунта компании.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px 22px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:16px">Профиль</div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+            <div style="width:56px;height:56px;border-radius:14px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px">Д7</div>
+            <button type="button" style="padding:8px 14px;border:1px solid var(--border);background:transparent;color:var(--text-2);border-radius:9px;font-size:12.5px;font-weight:600">Изменить фото</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div><label for="nm" style="font-size:12px;font-weight:600;color:var(--muted)">Имя</label><input id="nm" type="text" value="Иван Петров" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+            <div><label for="ps" style="font-size:12px;font-weight:600;color:var(--muted)">Должность</label><input id="ps" type="text" value="Директор" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+            <div><label for="em" style="font-size:12px;font-weight:600;color:var(--muted)">Email</label><input id="em" type="text" value="director7@mail.ru" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+            <div><label for="ph" style="font-size:12px;font-weight:600;color:var(--muted)">Телефон</label><input id="ph" type="text" value="+7 999 123-45-67" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+          </div>
+        </div>
+
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px 22px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:16px">Данные юр. лица</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div style="grid-column:span 2"><label for="ur" style="font-size:12px;font-weight:600;color:var(--muted)">Юридическое лицо</label><input id="ur" type="text" value="ООО «Гороховая»" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+            <div><label for="inn" style="font-size:12px;font-weight:600;color:var(--muted)">ИНН</label><input id="inn" type="text" value="7801234567" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px;font-family:'IBM Plex Mono',monospace"></div>
+            <div><label for="pt" style="font-size:12px;font-weight:600;color:var(--muted)">Название точки</label><input id="pt" type="text" value="Гороховая" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px 22px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:6px">Внешний вид</div>
+          <div style="font-size:12px;color:var(--muted-2);margin-bottom:14px">Тема приложения</div>
+          <div style="display:flex;gap:10px">
+            <div style="flex:1;border:1px solid var(--accent);background:rgba(46,123,246,0.12);border-radius:12px;padding:14px;text-align:center"><div style="height:34px;border-radius:7px;background:var(--surface-2);border:1px solid var(--accent);margin-bottom:9px"></div><div style="font-size:12.5px;font-weight:700;color:var(--text)">Тёмная</div></div>
+            <a href="AdminLight.dc.html" style="flex:1;border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;display:block"><div style="height:34px;border-radius:7px;background:#EDF1F8;border:1px solid var(--border);margin-bottom:9px"></div><div style="font-size:12.5px;font-weight:600;color:var(--muted)">Светлая</div></a>
+            <div style="flex:1;border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center"><div style="height:34px;border-radius:7px;background:linear-gradient(90deg,var(--surface-2) 50%,#EDF1F8 50%);border:1px solid var(--border);margin-bottom:9px"></div><div style="font-size:12.5px;font-weight:600;color:var(--muted)">Системная</div></div>
+          </div>
+        </div>
+
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px 22px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:14px">Оповещения</div>
+          <label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--border-2);cursor:pointer"><input type="checkbox" checked="checked" style="accent-color:var(--accent);width:17px;height:17px"><span style="font-size:13.5px">Новый комментарий от руководства</span></label>
+          <label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--border-2);cursor:pointer"><input type="checkbox" checked="checked" style="accent-color:var(--accent);width:17px;height:17px"><span style="font-size:13.5px">Напоминание сдать отчёт</span></label>
+          <label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--border-2);cursor:pointer"><input type="checkbox" style="accent-color:var(--accent);width:17px;height:17px"><span style="font-size:13.5px;color:var(--text-2)">Правки в документах</span></label>
+          <label style="display:flex;align-items:center;gap:11px;padding:9px 0;cursor:pointer"><input type="checkbox" checked="checked" style="accent-color:var(--accent);width:17px;height:17px"><span style="font-size:13.5px">Вход в аккаунт</span></label>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-top:2px">
+          <button type="button" class="sv-btn" style="padding:13px 22px;background:var(--accent);color:#fff;border:none;border-radius:11px;font-size:14px;font-weight:700">Сохранить</button>
+          <button type="button" style="padding:13px 20px;background:transparent;border:1px solid var(--border);color:var(--text-2);border-radius:11px;font-size:14px;font-weight:600">Отмена</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>

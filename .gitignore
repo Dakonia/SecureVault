@@ -1,0 +1,38 @@
+# --- Секреты и ключи: НИКОГДА не коммитить ---
+*.key
+*.pem
+*.p12
+*.pfx
+*.age
+*.asc
+*.gpg
+*identity*
+*secret*
+*.wgkey
+wg*.conf
+*.env
+.env*
+authorized_keys
+shamir-*
+*.share
+
+# Крипто-артефакты и данные
+*.enc
+*.blob
+/data/
+/backups/
+*.sqlite
+*.db
+
+# Сборка
+/target/
+node_modules/
+dist/
+build/
+*.log
+
+# ОС/редакторы
+.DS_Store
+.idea/
+.vscode/
+*.swp

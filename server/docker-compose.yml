@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: securevault-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: securevault
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: securevault
+    volumes:
+      - sv-db:/var/lib/postgresql/data
+
+  api:
+    build: .
+    image: securevault-api
+    container_name: securevault-api
+    restart: unless-stopped
+    depends_on: [db]
+    environment:
+      SECUREVAULT_TOKEN: ${SECUREVAULT_TOKEN:?set SECUREVAULT_TOKEN in .env}
+      SECUREVAULT_ADDR: 0.0.0.0:8088
+      SECUREVAULT_DATA: /data
+      DATABASE_URL: postgres://securevault:${POSTGRES_PASSWORD}@db:5432/securevault?sslmode=disable
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - sv-data:/data
+
+volumes:
+  sv-data:
+  sv-db:
