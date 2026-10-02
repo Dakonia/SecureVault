@@ -8,7 +8,8 @@ import { FileViewer } from "./FileViewer";
 export type Profile = { name: string; role: string; method: string; age_public: string; cert_serial: string; revoked: boolean };
 export type License = { org: string; kind: string; exp: number; valid: boolean; reason: string };
 export type RoleDef = { key: string; name: string; perms: string[] };
-export type MasterInfo = { org: string; login: string; server: string; role: string; profiles: Profile[]; roles: RoleDef[]; orgs: string[]; me_name: string; me_company: string; license: License | null };
+export type MasterInfo = { org: string; login: string; server: string; role: string; profiles: Profile[]; roles: RoleDef[]; orgs: string[]; me_name: string; me_company: string; perms: string[]; license: License | null };
+export const hasPerm = (info: MasterInfo, k: string) => (info.perms || []).includes(k);
 
 // каталог прав (ключ → подпись), сгруппирован. Управление профилями/ролями/организацией — только у мастера, здесь не выдаётся.
 const PERMS: { group: string; items: { key: string; label: string }[] }[] = [
@@ -457,6 +458,7 @@ function ProfilesSection({ masterLogin, pw, roles, orgs, onRolesChange, profiles
     if (!login.trim()) { setErr("Укажите логин"); return; }
     if (pass.length < 6) { setErr("Пароль не короче 6 символов"); return; }
     let useRole = role;
+    let usePerms = roles.find((r) => r.key === role)?.perms || [];
     setBusy(true); setErr("");
     try {
       if (isCustom) {
@@ -466,8 +468,9 @@ function ProfilesSection({ masterLogin, pw, roles, orgs, onRolesChange, profiles
         await invoke("sv_save_roles", { masterLogin, masterPassword: pw, roles: next });
         onRolesChange(next);
         useRole = nr.key;
+        usePerms = cPerms;
       }
-      await invoke("sv_create_profile", { masterLogin, masterPassword: pw, org, login: login.trim(), password: pass, role: useRole });
+      await invoke("sv_create_profile", { masterLogin, masterPassword: pw, org, login: login.trim(), password: pass, role: useRole, perms: usePerms });
       setDone({ login: login.trim(), pass });
       setLogin(""); setPass(""); setCName(""); setCPerms([]); setRole(roles[0]?.key || "director"); setOpen(false); reload();
     } catch (e) { setErr("" + String(e)); }
@@ -566,12 +569,12 @@ function ProfilesSection({ masterLogin, pw, roles, orgs, onRolesChange, profiles
         {err && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 10, textAlign: "center" }}>{err}</div>}
       </Drawer>
 
-      {edit && <ProfileEdit row={edit} masterLogin={masterLogin} pw={pw} roleName={roleName} onClose={() => setEdit(null)} onChanged={() => { setEdit(null); reload(); }} />}
+      {edit && <ProfileEdit row={edit} masterLogin={masterLogin} pw={pw} roleName={roleName} perms={roles.find((r) => r.key === edit.role)?.perms || []} onClose={() => setEdit(null)} onChanged={() => { setEdit(null); reload(); }} />}
     </>
   );
 }
 
-function ProfileEdit({ row, masterLogin, pw, roleName, onClose, onChanged }: { row: Row; masterLogin: string; pw: string; roleName: (k: string) => string; onClose: () => void; onChanged: () => void }) {
+function ProfileEdit({ row, masterLogin, pw, roleName, perms, onClose, onChanged }: { row: Row; masterLogin: string; pw: string; roleName: (k: string) => string; perms: string[]; onClose: () => void; onChanged: () => void }) {
   const [np, setNp] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -580,7 +583,7 @@ function ProfileEdit({ row, masterLogin, pw, roleName, onClose, onChanged }: { r
   const doReset = async () => {
     if (np.length < 6) { setErr("Пароль не короче 6 символов"); return; }
     setBusy("reset"); setErr("");
-    try { await invoke("sv_reset_profile_password", { masterLogin, masterPassword: pw, login: row.login, org: row.org, role: row.role, newPassword: np }); setReset(np); setNp(""); }
+    try { await invoke("sv_reset_profile_password", { masterLogin, masterPassword: pw, login: row.login, org: row.org, role: row.role, newPassword: np, perms }); setReset(np); setNp(""); }
     catch (e) { setErr("" + String(e)); }
     setBusy("");
   };
@@ -1034,7 +1037,7 @@ export function DirectorHome({ info, pw, theme, onToggleTheme, onExit }: { info:
 
       <div style={{ flexGrow: 1, overflow: "auto", padding: "28px 30px" }}>
         <div style={{ maxWidth: 960, margin: "0 auto" }}>
-          {section === "reports" && <DirReports login={login} pw={pw} recs={recs} loading={loading} reloadRecs={loadRecs} folders={folders} reloadFolders={loadFolders} path={path} setPath={setPath} />}
+          {section === "reports" && <DirReports login={login} pw={pw} info={info} recs={recs} loading={loading} reloadRecs={loadRecs} folders={folders} reloadFolders={loadFolders} path={path} setPath={setPath} />}
           {section === "profile" && <MeSection login={login} pw={pw} info={info} theme={theme} onToggleTheme={onToggleTheme} onExit={onExit} allowPassword={false} />}
         </div>
       </div>
@@ -1042,7 +1045,8 @@ export function DirectorHome({ info, pw, theme, onToggleTheme, onExit }: { info:
   );
 }
 
-function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolders, path, setPath }: { login: string; pw: string; recs: DRec[]; loading: boolean; reloadRecs: () => void; folders: string[]; reloadFolders: () => void; path: string; setPath: (p: string) => void }) {
+function DirReports({ login, pw, info, recs, loading, reloadRecs, folders, reloadFolders, path, setPath }: { login: string; pw: string; info: MasterInfo; recs: DRec[]; loading: boolean; reloadRecs: () => void; folders: string[]; reloadFolders: () => void; path: string; setPath: (p: string) => void }) {
+  const can = (k: string) => hasPerm(info, k);
   const [grid, setGrid] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
   const [fname, setFname] = useState("");
@@ -1058,6 +1062,7 @@ function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolde
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [view, setView] = useState<DRec | null>(null);
+  const [cmFor, setCmFor] = useState<DRec | null>(null);
   const [viewText, setViewText] = useState("");
   const [viewBusy, setViewBusy] = useState(false);
   const [fileView, setFileView] = useState<DRec | null>(null);
@@ -1150,9 +1155,9 @@ function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolde
             <button onClick={() => setGrid(false)} title="Список" style={{ padding: "8px 10px", background: !grid ? "var(--accent-tint)" : "transparent", border: "none", color: !grid ? "var(--accent-2)" : "var(--muted)", display: "flex" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg></button>
             <button onClick={() => setGrid(true)} title="Значки" style={{ padding: "8px 10px", background: grid ? "var(--accent-tint)" : "transparent", border: "none", color: grid ? "var(--accent-2)" : "var(--muted)", display: "flex" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></svg></button>
           </div>
-          <button style={{ ...ghost, opacity: path ? 1 : 0.5 }} disabled={!path} title={path ? "Создать папку внутри категории" : "Папки создаются внутри категории"} onClick={() => { setNewFolder(true); setFname(""); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, verticalAlign: "-2px" }}><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /><path d="M12 10v6M9 13h6" /></svg>Папка</button>
-          <button style={ghost} onClick={() => setAddOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, verticalAlign: "-2px" }}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>Добавить</button>
-          <button style={btn} onClick={() => setCreate(true)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>Создать</button>
+          {can("submit") && <button style={{ ...ghost, opacity: path ? 1 : 0.5 }} disabled={!path} title={path ? "Создать папку внутри категории" : "Папки создаются внутри категории"} onClick={() => { setNewFolder(true); setFname(""); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, verticalAlign: "-2px" }}><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /><path d="M12 10v6M9 13h6" /></svg>Папка</button>}
+          {can("submit") && <button style={ghost} onClick={() => setAddOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, verticalAlign: "-2px" }}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>Добавить</button>}
+          {can("submit") && <button style={btn} onClick={() => setCreate(true)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>Создать</button>}
         </div>
       </div>
 
@@ -1191,7 +1196,7 @@ function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolde
                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{r.kind === "file" ? <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></> : <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>}</svg>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", wordBreak: "break-word", lineHeight: 1.3 }}>{r.name}</div>
                   <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{fmtDate(r.at)}</div>
-                  <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ position: "absolute", top: 6, right: 6, background: "transparent", border: "none", color: "var(--muted-2)", padding: 3 }} title="Удалить"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>
+                  {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ position: "absolute", top: 6, right: 6, background: "transparent", border: "none", color: "var(--muted-2)", padding: 3 }} title="Удалить"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
                 </div>
               ))}
             </div>
@@ -1212,8 +1217,9 @@ function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolde
                   <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{fmtDate(r.at)} · {fmtSize(r.size)}</div>
                 </div>
                 <Pill tone={r.kind === "file" ? "muted" : "accent"}>{r.kind === "file" ? "файл" : "отчёт"}</Pill>
-                {r.kind === "file" && <button onClick={(e) => { e.stopPropagation(); startReplace(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Заменить файл"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg></button>}
-                <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>
+                {can("comments") && <button onClick={(e) => { e.stopPropagation(); setCmFor(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Комментарии"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></button>}
+                {r.kind === "file" && can("edit") && <button onClick={(e) => { e.stopPropagation(); startReplace(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Заменить файл"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg></button>}
+                {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
               </div>
             ))}
           </>}
@@ -1291,15 +1297,16 @@ function DirReports({ login, pw, recs, loading, reloadRecs, folders, reloadFolde
             <span style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-tint)", color: "var(--accent-2)" }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg></span>
             <div><div style={{ fontSize: 15, fontWeight: 650, color: "var(--text)" }}>{fileView.name}</div><div style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(fileView.at)} · {fmtSize(fileView.size)}</div></div>
           </div>
-          <button style={{ ...btn, width: "100%", marginBottom: 10 }} onClick={() => downloadRec(fileView)}>Скачать</button>
-          <button style={{ ...ghost, width: "100%", marginBottom: 10 }} onClick={() => openFileInApp(fileView)}>Открыть в программе</button>
-          <button style={{ ...ghost, width: "100%", color: "var(--danger)", borderColor: "var(--danger)" }} onClick={() => del(fileView)}>Удалить</button>
+          {can("export") && <button style={{ ...btn, width: "100%", marginBottom: 10 }} onClick={() => downloadRec(fileView)}>Скачать</button>}
+          {can("export") && <button style={{ ...ghost, width: "100%", marginBottom: 10 }} onClick={() => openFileInApp(fileView)}>Открыть в программе</button>}
+          {can("delete") && <button style={{ ...ghost, width: "100%", color: "var(--danger)", borderColor: "var(--danger)" }} onClick={() => del(fileView)}>Удалить</button>}
         </>}
       </Drawer>
 
-      {sheet && <SheetEditor initial={sheet.bytes} name={sheet.name} saving={sheetSaving} onSave={saveSheet} onDownload={(b, n) => saveToDisk(n, bytesToB64(b))} onOpenNative={sheet.id ? () => openNative(sheet.id as string, sheet.name) : undefined} onClose={() => !sheetSaving && setSheet(null)} />}
+      {sheet && <SheetEditor initial={sheet.bytes} name={sheet.name} saving={sheetSaving} onSave={saveSheet} onDownload={can("export") ? (b, n) => saveToDisk(n, bytesToB64(b)) : undefined} onOpenNative={sheet.id && can("export") ? () => openNative(sheet.id as string, sheet.name) : undefined} onClose={() => !sheetSaving && setSheet(null)} />}
       {doc && <DocEditor initial={doc.content} name={doc.name} saving={docSaving} onSave={saveDoc} onClose={() => !docSaving && setDoc(null)} />}
-      {viewer && <FileViewer bytes={viewer.bytes} name={viewer.rec.name} saving={!!opening} onDownload={() => saveToDisk(viewer.rec.name, bytesToB64(viewer.bytes))} onOpenNative={() => openNative(viewer.rec.id, viewer.rec.name)} onClose={() => setViewer(null)} />}
+      {viewer && <FileViewer bytes={viewer.bytes} name={viewer.rec.name} saving={!!opening} onDownload={can("export") ? () => saveToDisk(viewer.rec.name, bytesToB64(viewer.bytes)) : undefined} onOpenNative={can("export") ? () => openNative(viewer.rec.id, viewer.rec.name) : undefined} onClose={() => setViewer(null)} />}
+      {cmFor && <CommentsDrawer login={login} pw={pw} owner={login} rec={cmFor} onClose={() => setCmFor(null)} onPosted={reloadRecs} notify={notify} />}
       <ConfirmModal data={confirmData} onClose={() => setConfirmData(null)} />
       <Toast msg={toast} />
       {opening && <LoadingOverlay text={opening} />}
@@ -1402,6 +1409,14 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
   const [recent, setRecent] = useState<RvRecent[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<RvProfile | null>(null);
+  const can = (k: string) => hasPerm(info, k);
+  // собственные отчёты проверяющего (вкладка «Мои отчёты», если есть право сдавать)
+  const [ownRecs, setOwnRecs] = useState<DRec[]>([]);
+  const [ownLoading, setOwnLoading] = useState(false);
+  const [ownFolders, setOwnFolders] = useState<string[]>([]);
+  const [ownPath, setOwnPath] = useState("");
+  const loadOwn = async () => { setOwnLoading(true); try { setOwnRecs(await invoke<DRec[]>("sv_dir_list", { login, password: pw })); } catch { /* */ } setOwnLoading(false); };
+  const loadOwnFolders = async () => { try { setOwnFolders(await invoke<string[]>("sv_dir_folders", { login, password: pw })); } catch { /* */ } };
 
   const load = async () => {
     setLoading(true);
@@ -1414,7 +1429,7 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
     } catch { /* */ }
     setLoading(false);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); if (can("submit")) { loadOwn(); loadOwnFolders(); } }, []);
 
   const totalFiles = useMemo(() => profiles.reduce((a, p) => a + p.count, 0), [profiles]);
   const activeWeek = useMemo(() => new Set(recent.filter((r) => within7d(r.at)).map((r) => r.owner_login)).size, [recent]);
@@ -1445,6 +1460,7 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
         <div style={{ display: "flex", flexDirection: "column", gap: 3, overflow: "auto" }}>
           <SideBtn id="dash" label="Дашборд" icon={nic(<><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></>)} />
           <SideBtn id="profiles" label="Профили" icon={nic(<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>)} />
+          {can("submit") && <SideBtn id="mine" label="Мои отчёты" icon={nic(<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>)} />}
           <div style={{ height: 6 }} />
           <NavItem id="me" label="Мой профиль" active={!open && section === "me"} onClick={(id) => { setOpen(null); setSection(id); }} icon={nic(<><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>)} />
         </div>
@@ -1454,6 +1470,7 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
       <div style={{ flexGrow: 1, overflow: "auto", padding: "28px 34px" }}>
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
           {open ? <RvProfileView info={info} pw={pw} director={open} onBack={() => { setOpen(null); load(); }} />
+            : section === "mine" ? <DirReports login={login} pw={pw} info={info} recs={ownRecs} loading={ownLoading} reloadRecs={loadOwn} folders={ownFolders} reloadFolders={loadOwnFolders} path={ownPath} setPath={setOwnPath} />
             : section === "me" ? <MeSection login={login} pw={pw} info={info} theme={theme} onToggleTheme={onToggleTheme} onExit={onExit} allowPassword={false} />
             : loading ? <div style={{ fontSize: 13, color: "var(--muted)", padding: 30, display: "flex", alignItems: "center", gap: 8 }}><span className="spinner" /> Загрузка…</div>
               : section === "dash" ? (
@@ -1539,6 +1556,7 @@ function avatarGrad(s: string): string {
 }
 
 function RvProfileView({ info, pw, director, onBack }: { info: MasterInfo; pw: string; director: RvProfile; onBack: () => void }) {
+  const can = (k: string) => hasPerm(info, k);
   const login = info.login;
   const owner = director.login;
   const [recs, setRecs] = useState<RvRec[]>([]);
@@ -1614,7 +1632,7 @@ function RvProfileView({ info, pw, director, onBack }: { info: MasterInfo; pw: s
             <button onClick={() => setGrid(false)} style={{ padding: "8px 10px", background: !grid ? "var(--accent-tint)" : "transparent", border: "none", color: !grid ? "var(--accent-2)" : "var(--muted)", display: "flex" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg></button>
             <button onClick={() => setGrid(true)} style={{ padding: "8px 10px", background: grid ? "var(--accent-tint)" : "transparent", border: "none", color: grid ? "var(--accent-2)" : "var(--muted)", display: "flex" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></svg></button>
           </div>
-          <button style={btn} onClick={() => setAddOpen(true)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>Добавить</button>
+          {can("edit") && <button style={btn} onClick={() => setAddOpen(true)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>Добавить</button>}
         </div>
       </div>
 
@@ -1660,8 +1678,8 @@ function RvProfileView({ info, pw, director, onBack }: { info: MasterInfo; pw: s
                     <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{r.name}</div>
                     <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{fmtDate(r.at)} · {fmtSize(r.size)}{r.submitter && r.submitter !== owner ? " · добавил " + r.submitter : ""}</div>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); setCmFor(r); }} style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, background: r.comments > 0 ? "var(--accent-tint)" : "transparent", border: "none", color: r.comments > 0 ? "var(--accent-2)" : "var(--muted-2)", padding: "6px 9px", borderRadius: 8, fontSize: 12.5, fontWeight: 700 }} title="Комментарии"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>{r.comments > 0 ? r.comments : ""}</button>
-                  <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6, borderRadius: 8 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>
+                  {can("comments") && <button onClick={(e) => { e.stopPropagation(); setCmFor(r); }} style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, background: r.comments > 0 ? "var(--accent-tint)" : "transparent", border: "none", color: r.comments > 0 ? "var(--accent-2)" : "var(--muted-2)", padding: "6px 9px", borderRadius: 8, fontSize: 12.5, fontWeight: 700 }} title="Комментарии"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>{r.comments > 0 ? r.comments : ""}</button>}
+                  {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6, borderRadius: 8 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
                 </div>
               ))}
             </div>}
@@ -1695,9 +1713,9 @@ function RvProfileView({ info, pw, director, onBack }: { info: MasterInfo; pw: s
       </Drawer>
 
       {cmFor && <CommentsDrawer login={login} pw={pw} owner={owner} rec={cmFor} onClose={() => setCmFor(null)} onPosted={load} notify={notify} />}
-      {sheet && <SheetEditor initial={sheet.bytes} name={sheet.name} saving={sheetSaving} onSave={saveSheet} onDownload={(b, n) => saveToDisk(n, bytesToB64(b))} onOpenNative={sheet.id ? () => openNative(sheet.id as string, sheet.name) : undefined} onClose={() => !sheetSaving && setSheet(null)} />}
+      {sheet && <SheetEditor initial={sheet.bytes} name={sheet.name} saving={sheetSaving} onSave={saveSheet} onDownload={can("export") ? (b, n) => saveToDisk(n, bytesToB64(b)) : undefined} onOpenNative={sheet.id && can("export") ? () => openNative(sheet.id as string, sheet.name) : undefined} onClose={() => !sheetSaving && setSheet(null)} />}
       {doc && <DocEditor initial={doc.content} name={doc.name} saving={docSaving} onSave={saveDoc} onClose={() => !docSaving && setDoc(null)} />}
-      {viewer && <FileViewer bytes={viewer.bytes} name={viewer.rec.name} saving={!!opening} onDownload={() => downloadRec(viewer.rec)} onOpenNative={() => openNative(viewer.rec.id, viewer.rec.name)} onClose={() => setViewer(null)} />}
+      {viewer && <FileViewer bytes={viewer.bytes} name={viewer.rec.name} saving={!!opening} onDownload={can("export") ? () => downloadRec(viewer.rec) : undefined} onOpenNative={can("export") ? () => openNative(viewer.rec.id, viewer.rec.name) : undefined} onClose={() => setViewer(null)} />}
       <ConfirmModal data={confirmData} onClose={() => setConfirmData(null)} />
       <Toast msg={toast} />
       {opening && <LoadingOverlay text={opening} />}
@@ -1705,7 +1723,7 @@ function RvProfileView({ info, pw, director, onBack }: { info: MasterInfo; pw: s
   );
 }
 
-function CommentsDrawer({ login, pw, owner, rec, onClose, onPosted, notify }: { login: string; pw: string; owner: string; rec: RvRec; onClose: () => void; onPosted?: () => void; notify: (m: string) => void }) {
+function CommentsDrawer({ login, pw, owner, rec, onClose, onPosted, notify }: { login: string; pw: string; owner: string; rec: { id: string; name: string }; onClose: () => void; onPosted?: () => void; notify: (m: string) => void }) {
   const [list, setList] = useState<CommentT[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");

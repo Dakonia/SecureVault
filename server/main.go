@@ -181,6 +181,9 @@ func main() {
 		`CREATE TABLE IF NOT EXISTS comments(
 			id text PRIMARY KEY, record_id text NOT NULL, author text NOT NULL,
 			org text, blob bytea NOT NULL, at timestamptz NOT NULL DEFAULT now())`,
+		`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS perms text`,
+		`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS see_all boolean NOT NULL DEFAULT false`,
+		`UPDATE accounts SET see_all=true WHERE role='reviewer' AND see_all=false`,
 	} {
 		if _, err = db.Exec(q); err != nil {
 			log.Fatal(err)
@@ -369,15 +372,17 @@ func main() {
 			return
 		}
 		var req struct {
-			MasterLogin string `json:"master_login"`
-			MasterTok   string `json:"master_auth_token"`
-			Org         string `json:"org"`
-			Login       string `json:"login"`
-			Role        string `json:"role"`
-			Salt        string `json:"salt"`
-			AuthTok     string `json:"auth_token"`
-			EncVault    string `json:"enc_vault"`
-			PubKey      string `json:"pub_key"`
+			MasterLogin string   `json:"master_login"`
+			MasterTok   string   `json:"master_auth_token"`
+			Org         string   `json:"org"`
+			Login       string   `json:"login"`
+			Role        string   `json:"role"`
+			Salt        string   `json:"salt"`
+			AuthTok     string   `json:"auth_token"`
+			EncVault    string   `json:"enc_vault"`
+			PubKey      string   `json:"pub_key"`
+			Perms       []string `json:"perms"`
+			SeeAll      bool     `json:"see_all"`
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Login == "" {
 			writeErr(w, 400, "bad request")
@@ -409,8 +414,9 @@ func main() {
 			writeErr(w, 409, "Логин уже занят")
 			return
 		}
-		if _, err := db.Exec(`INSERT INTO accounts(login,org,salt,auth_hash,enc_vault,role,owner_login,pub_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-			req.Login, org, salt, h[:], vault, req.Role, req.MasterLogin, req.PubKey); err != nil {
+		permsJSON, _ := json.Marshal(req.Perms)
+		if _, err := db.Exec(`INSERT INTO accounts(login,org,salt,auth_hash,enc_vault,role,owner_login,pub_key,perms,see_all) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			req.Login, org, salt, h[:], vault, req.Role, req.MasterLogin, req.PubKey, string(permsJSON), req.SeeAll); err != nil {
 			writeErr(w, 500, "db")
 			return
 		}
@@ -463,13 +469,15 @@ func main() {
 			return
 		}
 		var req struct {
-			MasterLogin string `json:"master_login"`
-			MasterTok   string `json:"master_auth_token"`
-			Login       string `json:"login"`
-			Salt        string `json:"salt"`
-			AuthTok     string `json:"auth_token"`
-			EncVault    string `json:"enc_vault"`
-			PubKey      string `json:"pub_key"`
+			MasterLogin string   `json:"master_login"`
+			MasterTok   string   `json:"master_auth_token"`
+			Login       string   `json:"login"`
+			Salt        string   `json:"salt"`
+			AuthTok     string   `json:"auth_token"`
+			EncVault    string   `json:"enc_vault"`
+			PubKey      string   `json:"pub_key"`
+			Perms       []string `json:"perms"`
+			SeeAll      bool     `json:"see_all"`
 		}
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			writeErr(w, 400, "bad request")
@@ -492,7 +500,8 @@ func main() {
 			return
 		}
 		h := sha256.Sum256(tok)
-		if _, err := db.Exec(`UPDATE accounts SET salt=$1, auth_hash=$2, enc_vault=$3, pub_key=$4, updated_at=now() WHERE login=$5`, salt, h[:], vault, req.PubKey, req.Login); err != nil {
+		permsJSON, _ := json.Marshal(req.Perms)
+		if _, err := db.Exec(`UPDATE accounts SET salt=$1, auth_hash=$2, enc_vault=$3, pub_key=$4, perms=$5, see_all=$6, updated_at=now() WHERE login=$7`, salt, h[:], vault, req.PubKey, string(permsJSON), req.SeeAll, req.Login); err != nil {
 			writeErr(w, 500, "db")
 			return
 		}
@@ -901,7 +910,7 @@ func main() {
 		if ownerPub.Valid {
 			add(ownerPub.String)
 		}
-		rows, err := db.Query(`SELECT pub_key FROM accounts WHERE org=$1 AND role='reviewer' AND NOT revoked`, org)
+		rows, err := db.Query(`SELECT pub_key FROM accounts WHERE org=$1 AND see_all AND NOT revoked`, org)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -916,8 +925,12 @@ func main() {
 
 	// доступ проверяющего: только роль reviewer; возвращает его организацию
 	authReviewer := func(login, tok string) (string, bool) {
-		org, role, ok := authAccount(login, tok)
-		if !ok || role != "reviewer" {
+		org, _, ok := authAccount(login, tok)
+		if !ok {
+			return "", false
+		}
+		var seeAll bool
+		if db.QueryRow(`SELECT COALESCE(see_all,false) FROM accounts WHERE login=$1`, login).Scan(&seeAll) != nil || !seeAll {
 			return "", false
 		}
 		return org, true

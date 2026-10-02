@@ -4,7 +4,7 @@ import { renderAsync } from "docx-preview";
 const ext = (n: string) => (n.includes(".") ? n.slice(n.lastIndexOf(".") + 1).toLowerCase() : "");
 const toArrayBuffer = (b: Uint8Array) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 
-export function FileViewer({ bytes, name, saving, onDownload, onOpenNative, onClose }: { bytes: Uint8Array; name: string; saving: boolean; onDownload: () => void; onOpenNative?: () => void; onClose: () => void }) {
+export function FileViewer({ bytes, name, saving, onDownload, onOpenNative, onClose }: { bytes: Uint8Array; name: string; saving: boolean; onDownload?: () => void; onOpenNative?: () => void; onClose: () => void }) {
   const e = ext(name);
   const isDocx = e === "docx";
   const [text, setText] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export function FileViewer({ bytes, name, saving, onDownload, onOpenNative, onCl
         <div style={{ fontSize: 14.5, fontWeight: 650, color: "var(--text)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>{name}</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 9 }}>
           {onOpenNative && <button onClick={onOpenNative} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Открыть в программе</button>}
-          <button onClick={onDownload} disabled={saving} style={{ ...topBtn, display: "inline-flex", alignItems: "center", gap: 8, background: "var(--accent)", color: "#fff", border: "none", opacity: saving ? 0.7 : 1 }}>{saving ? <><span className="spinner spinner--on-accent" /> Сохраняю…</> : "Скачать"}</button>
+          {onDownload && <button onClick={onDownload} disabled={saving} style={{ ...topBtn, display: "inline-flex", alignItems: "center", gap: 8, background: "var(--accent)", color: "#fff", border: "none", opacity: saving ? 0.7 : 1 }}>{saving ? <><span className="spinner spinner--on-accent" /> Сохраняю…</> : "Скачать"}</button>}
           <button onClick={onClose} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Закрыть</button>
         </div>
       </div>

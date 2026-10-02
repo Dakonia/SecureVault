@@ -122,7 +122,7 @@ export default function App() {
   else if (authView === "activate") body = <MasterActivate onDone={(info, pw) => { setMaster({ info, pw }); setAuthView("home"); }} onExit={() => setAuthView("login")} />;
   else if (master) body = master.info.role === "master"
     ? <MasterHome info={master.info} pw={master.pw} theme={theme} onToggleTheme={toggleTheme} onExit={() => { setMaster(null); setAuthView("login"); }} />
-    : master.info.role === "reviewer"
+    : (master.info.perms || []).includes("view_all")
       ? <ReviewerHome info={master.info} pw={master.pw} theme={theme} onToggleTheme={toggleTheme} onExit={() => { setMaster(null); setAuthView("login"); }} />
       : <DirectorHome info={master.info} pw={master.pw} theme={theme} onToggleTheme={toggleTheme} onExit={() => { setMaster(null); setAuthView("login"); }} />;
 

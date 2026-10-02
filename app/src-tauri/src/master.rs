@@ -41,19 +41,36 @@ pub struct RoleDef {
     pub perms: Vec<String>,
 }
 
+fn all_perms() -> Vec<String> {
+    ["submit", "view_own", "view_all", "edit", "delete", "comments", "chat", "view_log", "export"]
+        .iter().map(|s| s.to_string()).collect()
+}
+
 fn default_roles() -> Vec<RoleDef> {
     vec![
         RoleDef {
             key: "director".into(),
             name: "Директор".into(),
-            perms: vec!["submit".into(), "view_own".into()],
+            perms: vec!["submit".into(), "view_own".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
         },
         RoleDef {
             key: "reviewer".into(),
             name: "Проверяющий".into(),
-            perms: vec!["view_all".into()],
+            perms: vec!["view_all".into(), "view_own".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
         },
     ]
+}
+
+// эффективные права аккаунта: из его сейфа, иначе из дефолтной роли (мастер — все)
+fn perms_for(v: &Vault) -> Vec<String> {
+    if !v.my_perms.is_empty() {
+        return v.my_perms.clone();
+    }
+    let role = if v.role.is_empty() { "master" } else { &v.role };
+    if role == "master" {
+        return all_perms();
+    }
+    default_roles().into_iter().find(|r| r.key == role).map(|r| r.perms).unwrap_or_default()
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -77,6 +94,8 @@ struct Vault {
     me_name: String,
     #[serde(default)]
     me_company: String,
+    #[serde(default)]
+    my_perms: Vec<String>,
 }
 
 // домашняя папка пользователя: HOME (macOS/Linux) или USERPROFILE (Windows)
@@ -258,6 +277,7 @@ pub struct MasterInfo {
     pub orgs: Vec<String>,
     pub me_name: String,
     pub me_company: String,
+    pub perms: Vec<String>,
     pub license: Option<LicenseInfo>,
 }
 
@@ -272,6 +292,7 @@ fn info_from(v: &Vault) -> MasterInfo {
         orgs: if v.orgs.is_empty() { vec![v.org.clone()] } else { v.orgs.clone() },
         me_name: v.me_name.clone(),
         me_company: v.me_company.clone(),
+        perms: perms_for(v),
         license: license::verify(&v.license).ok(),
     }
 }
@@ -324,6 +345,7 @@ pub fn sv_prepare_master_impl(
         orgs: vec![org.clone()],
         me_name: String::new(),
         me_company: String::new(),
+        my_perms: vec![],
     };
     let enc_vault = seal_vault(&serde_json::to_string(&v).map_err(|e| e.to_string())?, &enc_key)?;
     *pending().lock().unwrap() = Some(Pending {
@@ -496,6 +518,7 @@ pub fn sv_finish_master_impl(server: String) -> Result<MasterInfo, String> {
         orgs: vec![p.org],
         me_name: String::new(),
         me_company: String::new(),
+        perms: all_perms(),
         license: license::verify(&p.license_code).ok(),
     })
 }
@@ -665,6 +688,7 @@ pub fn sv_create_profile_impl(
     login: String,
     password: String,
     role: String,
+    perms: Vec<String>,
 ) -> Result<ProfileRow, String> {
     if login.trim().is_empty() {
         return Err("Укажите логин".into());
@@ -697,8 +721,10 @@ pub fn sv_create_profile_impl(
         orgs: vec![],
         me_name: String::new(),
         me_company: String::new(),
+        my_perms: perms.clone(),
     };
     let enc_vault = seal_vault(&serde_json::to_string(&v).map_err(|e| e.to_string())?, &enc_key)?;
+    let see_all = perms.iter().any(|p| p == "view_all");
     let body = serde_json::json!({
         "master_login": master_login.trim(),
         "master_auth_token": STANDARD.encode(master_tok),
@@ -709,6 +735,8 @@ pub fn sv_create_profile_impl(
         "auth_token": STANDARD.encode(auth_token),
         "enc_vault": STANDARD.encode(&enc_vault),
         "pub_key": dpub,
+        "perms": perms,
+        "see_all": see_all,
     });
     let resp = c
         .post(format!("{server}/auth/create_account"))
@@ -766,6 +794,7 @@ pub fn sv_reset_profile_password_impl(
     org: String,
     role: String,
     new_password: String,
+    perms: Vec<String>,
 ) -> Result<(), String> {
     if new_password.len() < 6 {
         return Err("Пароль не короче 6 символов".into());
@@ -791,8 +820,10 @@ pub fn sv_reset_profile_password_impl(
         orgs: vec![],
         me_name: String::new(),
         me_company: String::new(),
+        my_perms: perms.clone(),
     };
     let enc_vault = seal_vault(&serde_json::to_string(&v).map_err(|e| e.to_string())?, &enc_key)?;
+    let see_all = perms.iter().any(|p| p == "view_all");
     let resp = c
         .post(format!("{server}/auth/reset_account"))
         .json(&serde_json::json!({
@@ -803,6 +834,8 @@ pub fn sv_reset_profile_password_impl(
             "auth_token": STANDARD.encode(auth_token),
             "enc_vault": STANDARD.encode(&enc_vault),
             "pub_key": dpub,
+            "perms": perms,
+            "see_all": see_all,
         }))
         .send()
         .map_err(|e| format!("Сервер недоступен: {e}"))?;
@@ -1173,15 +1206,15 @@ pub async fn sv_renew_license(server: String, login: String, password: String, l
 }
 
 #[tauri::command]
-pub async fn sv_create_profile(master_login: String, master_password: String, org: String, login: String, password: String, role: String) -> Result<ProfileRow, String> {
-    tauri::async_runtime::spawn_blocking(move || sv_create_profile_impl(master_login, master_password, org, login, password, role))
+pub async fn sv_create_profile(master_login: String, master_password: String, org: String, login: String, password: String, role: String, perms: Vec<String>) -> Result<ProfileRow, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_create_profile_impl(master_login, master_password, org, login, password, role, perms))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn sv_reset_profile_password(master_login: String, master_password: String, login: String, org: String, role: String, new_password: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || sv_reset_profile_password_impl(master_login, master_password, login, org, role, new_password))
+pub async fn sv_reset_profile_password(master_login: String, master_password: String, login: String, org: String, role: String, new_password: String, perms: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_reset_profile_password_impl(master_login, master_password, login, org, role, new_password, perms))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1814,7 +1847,7 @@ mod tests {
         let dlogin = format!("d{}", std::process::id());
         // создаём во второй организации
         sv_add_org_impl(ml.clone(), "masterpass".into(), "Орг Два".into()).unwrap();
-        let p = sv_create_profile_impl(ml.clone(), "masterpass".into(), "Орг Два".into(), dlogin.clone(), "dirpass1".into(), "director".into()).unwrap();
+        let p = sv_create_profile_impl(ml.clone(), "masterpass".into(), "Орг Два".into(), dlogin.clone(), "dirpass1".into(), "director".into(), vec!["submit".into(), "view_own".into()]).unwrap();
         println!("создан профиль {} role={} org={}", p.login, p.role, p.org);
         assert_eq!(p.org, "Орг Два");
         let list = sv_list_profiles_impl(ml.clone(), "masterpass".into()).unwrap();
@@ -1825,7 +1858,7 @@ mod tests {
         println!("вход директора org={} role={}", di.org, di.role);
         assert_eq!(di.org, "Орг Два");
         // мастер сбрасывает пароль профиля
-        sv_reset_profile_password_impl(ml.clone(), "masterpass".into(), dlogin.clone(), "Орг Два".into(), "director".into(), "newpass9".into()).unwrap();
+        sv_reset_profile_password_impl(ml.clone(), "masterpass".into(), dlogin.clone(), "Орг Два".into(), "director".into(), "newpass9".into(), vec!["submit".into(), "view_own".into()]).unwrap();
         let di2 = sv_login_impl(dlogin.clone(), "newpass9".into()).unwrap();
         println!("вход после сброса пароля мастером: org={}", di2.org);
         assert_eq!(di2.role, "director");

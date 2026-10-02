@@ -61,7 +61,7 @@ function univerToBytes(snap: Any): Uint8Array {
   return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
 }
 
-export function SheetEditor({ initial, name, saving, onSave, onDownload, onOpenNative, onClose }: { initial?: Uint8Array | null; name: string; saving: boolean; onSave: (bytes: Uint8Array, name: string) => void; onDownload: (bytes: Uint8Array, name: string) => void; onOpenNative?: () => void; onClose: () => void }) {
+export function SheetEditor({ initial, name, saving, onSave, onDownload, onOpenNative, onClose }: { initial?: Uint8Array | null; name: string; saving: boolean; onSave: (bytes: Uint8Array, name: string) => void; onDownload?: (bytes: Uint8Array, name: string) => void; onOpenNative?: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const univerRef = useRef<Any>(null);
   const apiRef = useRef<Any>(null);
@@ -112,7 +112,7 @@ export function SheetEditor({ initial, name, saving, onSave, onDownload, onOpenN
         <input value={fname} onChange={(e) => setFname(e.target.value)} style={{ width: 260, padding: "8px 11px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)", fontSize: 14, outline: "none" }} />
         <div style={{ marginLeft: "auto", display: "flex", gap: 9 }}>
           {onOpenNative && <button onClick={onOpenNative} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Открыть в программе</button>}
-          {!error && <button onClick={() => onDownload(buildBytes(), finalName())} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Скачать</button>}
+          {!error && onDownload && <button onClick={() => onDownload(buildBytes(), finalName())} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Скачать</button>}
           <button onClick={doClose} disabled={saving} style={{ ...topBtn, background: "transparent", border: "1px solid var(--border)", color: "var(--text-2)" }}>Закрыть</button>
           {!error && <button onClick={() => { dirty.current = false; onSave(buildBytes(), finalName()); }} disabled={saving} style={{ ...topBtn, display: "inline-flex", alignItems: "center", gap: 8, background: "var(--accent)", color: "#fff", border: "none", opacity: saving ? 0.7 : 1 }}>{saving ? <><span className="spinner spinner--on-accent" /> Сохраняю…</> : "Сохранить"}</button>}
         </div>
