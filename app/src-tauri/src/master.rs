@@ -79,6 +79,11 @@ struct Vault {
     me_company: String,
 }
 
+// домашняя папка пользователя: HOME (macOS/Linux) или USERPROFILE (Windows)
+fn home_dir() -> Option<String> {
+    std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok())
+}
+
 // адрес сервера на время сессии — держим в памяти, на диск в открытом виде не пишем
 static SESSION_SERVER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -96,7 +101,7 @@ fn default_server() -> String {
             }
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = home_dir() {
         if let Ok(s) = std::fs::read_to_string(format!("{home}/.securevault-dev/server")) {
             let s = s.trim().to_string();
             if !s.is_empty() {
@@ -109,7 +114,7 @@ fn default_server() -> String {
 
 // путь к запечатанному адресу подключения (разовый код)
 fn conn_file() -> Option<String> {
-    std::env::var("HOME").ok().map(|h| format!("{h}/.securevault-dev/conn"))
+    home_dir().map(|h| format!("{h}/.securevault-dev/conn"))
 }
 
 // адрес из запечатанного кода, открывается паролем пользователя
@@ -124,7 +129,7 @@ fn sealed_server(password: &str) -> Option<String> {
 }
 
 fn remember_server(server: &str) {
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = home_dir() {
         let _ = std::fs::create_dir_all(format!("{home}/.securevault-dev"));
         let _ = std::fs::write(format!("{home}/.securevault-dev/server"), server.trim());
     }
@@ -231,8 +236,7 @@ fn gen_ca(org: &str) -> Result<(String, String), String> {
 const EMBEDDED_CA: &str = include_str!("../ca.crt");
 
 fn http() -> Result<reqwest::blocking::Client, String> {
-    let ca_pem = std::env::var("HOME")
-        .ok()
+    let ca_pem = home_dir()
         .and_then(|home| std::fs::read_to_string(format!("{home}/.securevault-dev/ca.crt")).ok())
         .unwrap_or_else(|| EMBEDDED_CA.to_string());
     let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes()).map_err(|e| e.to_string())?;
