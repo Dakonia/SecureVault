@@ -51,6 +51,7 @@ pub fn run() {
             master::sv_rv_delete,
             master::sv_cm_list,
             master::sv_cm_add,
+            master::sv_mylog,
             master::sv_connect_code,
             master::sv_conn_status,
             master::sv_make_conn_code,

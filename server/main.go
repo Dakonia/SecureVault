@@ -184,6 +184,7 @@ func main() {
 		`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS perms text`,
 		`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS see_all boolean NOT NULL DEFAULT false`,
 		`UPDATE accounts SET see_all=true WHERE role='reviewer' AND see_all=false`,
+		`CREATE TABLE IF NOT EXISTS user_log(seq bigserial PRIMARY KEY, actor text NOT NULL, action text NOT NULL, target text, at timestamptz NOT NULL DEFAULT now())`,
 	} {
 		if _, err = db.Exec(q); err != nil {
 			log.Fatal(err)
@@ -363,6 +364,10 @@ func main() {
 		hh.Write([]byte(action + "\x00" + target + "\x00" + org + "\x00" + at.Format(time.RFC3339Nano)))
 		sum := hh.Sum(nil)
 		db.Exec(`INSERT INTO audit(owner_login,action,target,org,at,prev_hash,hash) VALUES($1,$2,$3,$4,$5,$6,$7)`, owner, action, target, org, at, prev, sum)
+	}
+
+	addUserLog := func(actor, action, target string) {
+		db.Exec(`INSERT INTO user_log(actor,action,target) VALUES($1,$2,$3)`, actor, action, target)
 	}
 
 	// мастер создаёт профиль сотрудника (без новой лицензии, под своей организацией)
@@ -697,6 +702,7 @@ func main() {
 		if owner.Valid && owner.String != "" {
 			addAudit(owner.String, "report_submitted", title, org)
 		}
+		addUserLog(login, "submit", title)
 		writeJSON(w, map[string]string{"id": id})
 	})
 
@@ -714,24 +720,25 @@ func main() {
 			writeErr(w, 401, "unauthorized")
 			return
 		}
-		rows, err := db.Query(`SELECT id, doc_type, filename, size, folder, created_at FROM records WHERE owner_login=$1 ORDER BY created_at DESC`, req.Login)
+		rows, err := db.Query(`SELECT r.id, r.doc_type, r.filename, r.size, r.folder, r.created_at, COALESCE(cc.n,0) FROM records r LEFT JOIN (SELECT record_id, count(*) n FROM comments GROUP BY record_id) cc ON cc.record_id=r.id WHERE r.owner_login=$1 ORDER BY r.created_at DESC`, req.Login)
 		if err != nil {
 			writeErr(w, 500, "db")
 			return
 		}
 		defer rows.Close()
 		type rec struct {
-			ID     string    `json:"id"`
-			Kind   string    `json:"kind"`
-			Name   string    `json:"name"`
-			Size   int64     `json:"size"`
-			Folder string    `json:"folder"`
-			At     time.Time `json:"at"`
+			ID       string    `json:"id"`
+			Kind     string    `json:"kind"`
+			Name     string    `json:"name"`
+			Size     int64     `json:"size"`
+			Folder   string    `json:"folder"`
+			Comments int       `json:"comments"`
+			At       time.Time `json:"at"`
 		}
 		out := []rec{}
 		for rows.Next() {
 			var x rec
-			if rows.Scan(&x.ID, &x.Kind, &x.Name, &x.Size, &x.Folder, &x.At) == nil {
+			if rows.Scan(&x.ID, &x.Kind, &x.Name, &x.Size, &x.Folder, &x.At, &x.Comments) == nil {
 				out = append(out, x)
 			}
 		}
@@ -800,8 +807,11 @@ func main() {
 			writeErr(w, 400, "bad id")
 			return
 		}
+		var delName string
+		db.QueryRow(`SELECT filename FROM records WHERE id=$1`, req.ID).Scan(&delName)
 		db.Exec(`DELETE FROM records WHERE id=$1`, req.ID)
 		os.Remove(filepath.Join(dataDir, req.ID))
+		addUserLog(req.Login, "delete", delName)
 		io.WriteString(w, "ok")
 	})
 
@@ -1154,6 +1164,7 @@ func main() {
 			writeErr(w, 500, "db")
 			return
 		}
+		addUserLog(login, "add", title+" -> "+owner)
 		writeJSON(w, map[string]string{"id": id})
 	})
 
@@ -1186,10 +1197,47 @@ func main() {
 			writeErr(w, 404, "not found")
 			return
 		}
+		var rvDelName string
+		db.QueryRow(`SELECT filename FROM records WHERE id=$1`, req.ID).Scan(&rvDelName)
 		db.Exec(`DELETE FROM records WHERE id=$1`, req.ID)
 		db.Exec(`DELETE FROM comments WHERE record_id=$1`, req.ID)
 		os.Remove(filepath.Join(dataDir, req.ID))
+		addUserLog(req.Login, "delete", rvDelName)
 		io.WriteString(w, "ok")
+	})
+
+	mux.HandleFunc("/data/mylog", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Login   string `json:"login"`
+			AuthTok string `json:"auth_token"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			writeErr(w, 400, "bad request")
+			return
+		}
+		if _, _, ok := authAccount(req.Login, req.AuthTok); !ok {
+			writeErr(w, 401, "unauthorized")
+			return
+		}
+		rows, err := db.Query(`SELECT action, target, at FROM user_log WHERE actor=$1 ORDER BY seq DESC LIMIT 200`, req.Login)
+		if err != nil {
+			writeErr(w, 500, "db")
+			return
+		}
+		defer rows.Close()
+		type ent struct {
+			Action string    `json:"action"`
+			Target string    `json:"target"`
+			At     time.Time `json:"at"`
+		}
+		out := []ent{}
+		for rows.Next() {
+			var e ent
+			if rows.Scan(&e.Action, &e.Target, &e.At) == nil {
+				out = append(out, e)
+			}
+		}
+		writeJSON(w, out)
 	})
 
 	// доступ к комментариям записи: любой аккаунт той же организации
@@ -1278,6 +1326,9 @@ func main() {
 			writeErr(w, 500, "db")
 			return
 		}
+		var cmName string
+		db.QueryRow(`SELECT filename FROM records WHERE id=$1`, req.RecordID).Scan(&cmName)
+		addUserLog(req.Login, "comment", cmName)
 		io.WriteString(w, "ok")
 	})
 

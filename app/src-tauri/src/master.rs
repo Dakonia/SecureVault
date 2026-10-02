@@ -156,7 +156,7 @@ fn remember_server(server: &str) {
 
 // Адрес нашего сервера лицензий (LA) — всегда наш, вшит в приложение.
 fn la_url() -> String {
-    std::env::var("SV_LA").unwrap_or_else(|_| "https://127.0.0.1:18099".to_string())
+    std::env::var("SV_LA").unwrap_or_else(|_| "https://31.44.7.33:8099".to_string())
 }
 
 #[tauri::command]
@@ -1261,6 +1261,7 @@ pub struct DirRec {
     pub name: String,
     pub size: i64,
     pub folder: String,
+    pub comments: i64,
     pub at: String,
 }
 
@@ -1381,6 +1382,7 @@ pub fn sv_dir_list_impl(login: String, password: String) -> Result<Vec<DirRec>, 
         name: j["name"].as_str().unwrap_or("").to_string(),
         size: j["size"].as_i64().unwrap_or(0),
         folder: j["folder"].as_str().unwrap_or("").to_string(),
+        comments: j["comments"].as_i64().unwrap_or(0),
         at: j["at"].as_str().unwrap_or("").to_string(),
     }).collect())
 }
@@ -1786,6 +1788,27 @@ pub async fn sv_cm_list(login: String, password: String, record_id: String) -> R
 #[tauri::command]
 pub async fn sv_cm_add(login: String, password: String, record_id: String, owner: String, text: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || cm_add_impl(login, password, record_id, owner, text)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+pub struct MyLogEnt {
+    pub action: String,
+    pub target: String,
+    pub at: String,
+}
+
+pub fn mylog_impl(login: String, password: String) -> Result<Vec<MyLogEnt>, String> {
+    let arr = rv_post_array("/data/mylog", &login, &password, serde_json::json!({}))?;
+    Ok(arr.into_iter().map(|j| MyLogEnt {
+        action: j["action"].as_str().unwrap_or("").to_string(),
+        target: j["target"].as_str().unwrap_or("").to_string(),
+        at: j["at"].as_str().unwrap_or("").to_string(),
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn sv_mylog(login: String, password: String) -> Result<Vec<MyLogEnt>, String> {
+    tauri::async_runtime::spawn_blocking(move || mylog_impl(login, password)).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

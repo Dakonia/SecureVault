@@ -490,6 +490,21 @@ function ProfilesSection({ masterLogin, pw, roles, orgs, onRolesChange, profiles
         </button>
       </div>
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 20 }}>
+        {[
+          ["sv-g1", "Профилей", String(profiles.length), <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>],
+          ["sv-g3", "Активных", String(profiles.filter((p) => !p.revoked).length), <><path d="M20 6 9 17l-5-5" /></>],
+          ["sv-g4", "Отозвано", String(profiles.filter((p) => p.revoked).length), <><path d="M18 6 6 18M6 6l12 12" /></>],
+          ["sv-g2", "Организаций", String(orgs.length), <><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4" /></>],
+        ].map(([cls, label, val, icon], i) => (
+          <div key={i as number} className={`sv-stat ${cls} sv-in sv-lift`} style={{ animationDelay: `${(i as number) * 60}ms` }}>
+            <span className="sv-ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg></span>
+            <div className="sv-val">{val}</div>
+            <div className="sv-lab">{label}</div>
+          </div>
+        ))}
+      </div>
+
       {done && (
         <div style={{ display: "flex", alignItems: "center", gap: 14, border: "1px solid var(--green)", background: "color-mix(in srgb, var(--green) 9%, transparent)", borderRadius: 12, padding: "13px 16px", marginBottom: 16 }}>
           <span style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--green)", color: "#fff" }}>
@@ -542,7 +557,25 @@ function ProfilesSection({ masterLogin, pw, roles, orgs, onRolesChange, profiles
         <div style={{ fontSize: 11, color: "var(--muted-2)", marginTop: 5 }}>Профиль будет работать только в этой организации.</div>
         <div style={{ height: 14 }} />
         <label style={lbl}>Роль</label>
-        <Select value={role} onChange={setRole} options={[...roles.map((r) => ({ value: r.key, label: r.name })), { value: "__custom__", label: "＋ Своя роль…" }]} />
+        <Select value={role} onChange={(v) => { setRole(v); if (v === "__custom__" && cPerms.length === 0) setCPerms(["submit", "view_own", "edit", "delete", "comments", "export", "chat", "view_log"]); }} options={[...roles.map((r) => ({ value: r.key, label: r.name })), { value: "__custom__", label: "＋ Своя роль…" }]} />
+
+        {!isCustom && (
+          <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 11, padding: "13px 14px", background: "var(--surface-2)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Права по умолчанию</span>
+              {(roles.find((r) => r.key === role)?.perms || []).includes("view_all") && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", padding: "2px 8px", borderRadius: 7 }}>ВИДИТ ВСЁ</span>}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+              {PERMS.flatMap((g) => g.items).map((it) => {
+                const on = (roles.find((r) => r.key === role)?.perms || []).includes(it.key);
+                return <span key={it.key} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 8, background: on ? "var(--accent-tint)" : "transparent", color: on ? "var(--accent-2)" : "var(--muted-2)", border: "1px solid " + (on ? "transparent" : "var(--border-2)"), opacity: on ? 1 : 0.55 }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">{on ? <path d="M20 6 9 17l-5-5" /> : <path d="M5 12h14" />}</svg>{it.label}
+                </span>;
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted-2)", marginTop: 10 }}>Изменить набор прав — в разделе «Роли и права», или выберите «Своя роль».</div>
+          </div>
+        )}
 
         {isCustom && (
           <div style={{ marginTop: 14, border: "1px dashed var(--accent)", borderRadius: 11, padding: "13px 14px", background: "var(--accent-tint)" }}>
@@ -981,7 +1014,7 @@ const isDoc = (name: string) => /\.svdoc$/i.test(name);
 const isViewable = (name: string) => /\.(pdf|docx|txt|md|log|json|xml|png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(name);
 const fmtSize = (n: number) => (n < 1024 ? `${n} Б` : n < 1048576 ? `${(n / 1024).toFixed(0)} КБ` : `${(n / 1048576).toFixed(1)} МБ`);
 const fmtDate = (s: string) => { try { return new Date(s).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }); } catch { return s; } };
-type DRec = { id: string; kind: string; name: string; size: number; folder: string; at: string };
+type DRec = { id: string; kind: string; name: string; size: number; folder: string; comments: number; at: string };
 
 export function DirectorHome({ info, pw, theme, onToggleTheme, onExit }: { info: MasterInfo; pw: string; theme: string; onToggleTheme: () => void; onExit: () => void }) {
   const login = info.login;
@@ -1030,6 +1063,7 @@ export function DirectorHome({ info, pw, theme, onToggleTheme, onExit }: { info:
             );
           })}
           <div style={{ height: 6 }} />
+          {hasPerm(info, "view_log") && <NavItem id="log" label="Журнал" active={section === "log"} onClick={setSection} icon={nic(<><path d="M12 8v4l3 2" /><circle cx="12" cy="12" r="9" /></>)} />}
           <NavItem id="profile" label="Профиль" active={section === "profile"} onClick={setSection} icon={nic(<><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>)} />
         </div>
         <button style={{ ...ghost, marginTop: "auto" }} onClick={onExit}>Выйти</button>
@@ -1038,6 +1072,7 @@ export function DirectorHome({ info, pw, theme, onToggleTheme, onExit }: { info:
       <div style={{ flexGrow: 1, overflow: "auto", padding: "28px 30px" }}>
         <div style={{ maxWidth: 960, margin: "0 auto" }}>
           {section === "reports" && <DirReports login={login} pw={pw} info={info} recs={recs} loading={loading} reloadRecs={loadRecs} folders={folders} reloadFolders={loadFolders} path={path} setPath={setPath} />}
+          {section === "log" && <JournalMine login={login} pw={pw} />}
           {section === "profile" && <MeSection login={login} pw={pw} info={info} theme={theme} onToggleTheme={onToggleTheme} onExit={onExit} allowPassword={false} />}
         </div>
       </div>
@@ -1174,55 +1209,55 @@ function DirReports({ login, pw, info, recs, loading, reloadRecs, folders, reloa
         </div>
       )}
 
-      <div style={{ ...box, padding: 0, overflow: "hidden" }}>
+      <div style={{ ...box, padding: 8 }}>
         {loading ? <div style={{ fontSize: 13, color: "var(--muted)", padding: 20, display: "flex", alignItems: "center", gap: 8 }}><span className="spinner" /> Загрузка…</div>
           : subfolders.length === 0 && files.length === 0 ? (
             <div style={{ padding: "40px 20px", textAlign: "center" }}>
-              <div style={{ width: 46, height: 46, borderRadius: 13, margin: "0 auto 12px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-2)", color: "var(--muted)" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg></div>
+              <div style={{ width: 52, height: 52, borderRadius: 15, margin: "0 auto 12px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-tint)", color: "var(--accent-2)" }}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg></div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{path ? "В этой папке пусто" : "Нет категорий"}</div>
               <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 4 }}>{path ? "Создайте папку или сдайте отчёт." : "Категории создаёт администратор. Внутри категории можно создавать папки."}</div>
             </div>
           ) : grid ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 12, padding: 16 }}>
-              {subfolders.map((f) => (
-                <div key={"gf" + f} className="row-hover" onClick={() => setPath(f)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "16px 10px", borderRadius: 11, border: "1px solid var(--border-2)", cursor: "pointer", textAlign: "center" }}>
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(142px, 1fr))", gap: 12, padding: 10 }}>
+              {subfolders.map((f, i) => (
+                <div key={"gf" + f} className="sv-lift sv-in" onClick={() => setPath(f)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 9, padding: "18px 10px", borderRadius: 13, border: "1px solid var(--border-2)", background: "var(--surface-2)", cursor: "pointer", textAlign: "center", animationDelay: `${i * 35}ms` }}>
+                  <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", wordBreak: "break-word", lineHeight: 1.3 }}>{base(f)}</div>
                   <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{folderCount(f)} файл.</div>
                 </div>
               ))}
-              {files.map((r) => (
-                <div key={"g" + r.id} className="row-hover" onClick={() => openRec(r)} style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "16px 10px", borderRadius: 11, border: "1px solid var(--border-2)", cursor: "pointer", textAlign: "center" }}>
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{r.kind === "file" ? <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></> : <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>}</svg>
+              {files.map((r, i) => (
+                <div key={"g" + r.id} className="sv-lift sv-in" onClick={() => openRec(r)} style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 9, padding: "18px 10px", borderRadius: 13, border: "1px solid var(--border-2)", background: "var(--surface-2)", cursor: "pointer", textAlign: "center", animationDelay: `${(subfolders.length + i) * 35}ms` }}>
+                  {r.comments > 0 && <span className="sv-badge" style={{ position: "absolute", top: 8, left: 8, background: "linear-gradient(135deg,#0ea5e9,#22d3ee)" }}>{r.comments}</span>}
+                  {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ position: "absolute", top: 6, right: 6, background: "transparent", border: "none", color: "var(--muted-2)", padding: 3 }} title="Удалить"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
+                  <span style={{ width: 46, height: 46, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: r.kind === "file" ? "var(--accent-tint)" : "color-mix(in srgb, #10b981 16%, transparent)", color: r.kind === "file" ? "var(--accent-2)" : "#10b981" }}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{r.kind === "file" ? <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></> : <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>}</svg></span>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", wordBreak: "break-word", lineHeight: 1.3 }}>{r.name}</div>
                   <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{fmtDate(r.at)}</div>
-                  {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ position: "absolute", top: 6, right: 6, background: "transparent", border: "none", color: "var(--muted-2)", padding: 3 }} title="Удалить"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
                 </div>
               ))}
             </div>
-          ) : <>
-            {subfolders.map((f, i) => (
-              <div key={"f" + f} className="row-hover" onClick={() => setPath(f)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderTop: i ? "1px solid var(--border-2)" : "none", cursor: "pointer" }}>
-                <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in srgb, var(--amber) 16%, transparent)", color: "var(--amber)" }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg></span>
+          ) : <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: 2 }}>
+            {subfolders.map((f) => (
+              <div key={"f" + f} className="sv-item" onClick={() => setPath(f)}>
+                <span style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in srgb, var(--amber) 16%, transparent)", color: "var(--amber)" }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg></span>
                 <div style={{ flexGrow: 1, fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{base(f)}</div>
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>{folderCount(f)} файл.</span>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted-2)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
               </div>
             ))}
-            {files.map((r, i) => (
-              <div key={r.id} className="row-hover" onClick={() => openRec(r)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderTop: (i || subfolders.length) ? "1px solid var(--border-2)" : "none", cursor: "pointer" }}>
-                <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-tint)", color: "var(--accent-2)" }}>{r.kind === "file" ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16M4 10h16M4 16h10" /></svg>}</span>
-                <div style={{ flexGrow: 1 }}>
+            {files.map((r) => (
+              <div key={r.id} className="sv-item" onClick={() => openRec(r)}>
+                <span style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: r.kind === "file" ? "var(--accent-tint)" : "color-mix(in srgb, #10b981 16%, transparent)", color: r.kind === "file" ? "var(--accent-2)" : "#10b981" }}>{r.kind === "file" ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg> : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16M4 10h16M4 16h10" /></svg>}</span>
+                <div style={{ flexGrow: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{r.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{fmtDate(r.at)} · {fmtSize(r.size)}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{fmtDate(r.at)} · {fmtSize(r.size)} · {r.kind === "file" ? "файл" : "отчёт"}</div>
                 </div>
-                <Pill tone={r.kind === "file" ? "muted" : "accent"}>{r.kind === "file" ? "файл" : "отчёт"}</Pill>
-                {can("comments") && <button onClick={(e) => { e.stopPropagation(); setCmFor(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Комментарии"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></button>}
-                {r.kind === "file" && can("edit") && <button onClick={(e) => { e.stopPropagation(); startReplace(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Заменить файл"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg></button>}
-                {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
+                {can("comments") && <button onClick={(e) => { e.stopPropagation(); setCmFor(r); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: r.comments > 0 ? "var(--accent-tint)" : "transparent", border: "none", color: r.comments > 0 ? "var(--accent-2)" : "var(--muted-2)", padding: "6px 9px", borderRadius: 8, fontSize: 12.5, fontWeight: 700 }} title={r.comments > 0 ? `Комментариев: ${r.comments}` : "Оставить комментарий"}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>{r.comments > 0 ? r.comments : ""}</button>}
+                {r.kind === "file" && can("edit") && <button onClick={(e) => { e.stopPropagation(); startReplace(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6, borderRadius: 8 }} title="Заменить файл"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" /></svg></button>}
+                {can("delete") && <button onClick={(e) => { e.stopPropagation(); del(r); }} style={{ background: "transparent", border: "none", color: "var(--muted-2)", padding: 6, borderRadius: 8 }} title="Удалить"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg></button>}
               </div>
             ))}
-          </>}
+          </div>}
       </div>
 
       <input ref={replaceInput} type="file" style={{ display: "none" }} onChange={(e) => onReplaceFile(e.target.files?.[0] || null)} />
@@ -1462,6 +1497,7 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
           <SideBtn id="profiles" label="Профили" icon={nic(<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>)} />
           {can("submit") && <SideBtn id="mine" label="Мои отчёты" icon={nic(<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>)} />}
           <div style={{ height: 6 }} />
+          {can("view_log") && <button onClick={() => { setOpen(null); setSection("log"); }} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 10, border: "none", textAlign: "left", background: !open && section === "log" ? "var(--accent-tint)" : "transparent", color: !open && section === "log" ? "var(--accent-2)" : "var(--text-2)", fontSize: 13.5, fontWeight: 600 }}><span style={{ display: "flex", width: 18 }}>{nic(<><path d="M12 8v4l3 2" /><circle cx="12" cy="12" r="9" /></>)}</span>Журнал</button>}
           <NavItem id="me" label="Мой профиль" active={!open && section === "me"} onClick={(id) => { setOpen(null); setSection(id); }} icon={nic(<><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>)} />
         </div>
         <button style={{ ...ghost, marginTop: "auto" }} onClick={onExit}>Выйти</button>
@@ -1471,6 +1507,7 @@ export function ReviewerHome({ info, pw, theme, onToggleTheme, onExit }: { info:
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
           {open ? <RvProfileView info={info} pw={pw} director={open} onBack={() => { setOpen(null); load(); }} />
             : section === "mine" ? <DirReports login={login} pw={pw} info={info} recs={ownRecs} loading={ownLoading} reloadRecs={loadOwn} folders={ownFolders} reloadFolders={loadOwnFolders} path={ownPath} setPath={setOwnPath} />
+            : section === "log" ? <JournalMine login={login} pw={pw} />
             : section === "me" ? <MeSection login={login} pw={pw} info={info} theme={theme} onToggleTheme={onToggleTheme} onExit={onExit} allowPassword={false} />
             : loading ? <div style={{ fontSize: 13, color: "var(--muted)", padding: 30, display: "flex", alignItems: "center", gap: 8 }}><span className="spinner" /> Загрузка…</div>
               : section === "dash" ? (
@@ -1731,21 +1768,77 @@ function CommentsDrawer({ login, pw, owner, rec, onClose, onPosted, notify }: { 
   const load = async () => { setLoading(true); try { setList(await invoke<CommentT[]>("sv_cm_list", { login, password: pw, recordId: rec.id })); } catch (e) { notify("" + String(e)); } setLoading(false); };
   useEffect(() => { load(); }, [rec.id]);
   const send = async () => { if (!text.trim()) return; setBusy(true); try { await invoke("sv_cm_add", { login, password: pw, recordId: rec.id, owner, text: text.trim() }); setText(""); await load(); onPosted?.(); } catch (e) { notify("" + String(e)); } setBusy(false); };
+  const onKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } };
   return (
     <Drawer open onClose={() => !busy && onClose()} title="Комментарии">
-      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>К файлу: <b style={{ color: "var(--text-2)" }}>{rec.name}</b></div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16, maxHeight: "50vh", overflow: "auto" }}>
-        {loading ? <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 13 }}><span className="spinner" /> Загрузка…</div>
-          : list.length === 0 ? <div style={{ fontSize: 13, color: "var(--muted)", padding: "10px 0" }}>Комментариев пока нет.</div>
-            : list.map((c, i) => (
-              <div key={i} style={{ padding: "10px 12px", borderRadius: 10, background: c.author === login ? "var(--accent-tint)" : "var(--surface-2)", border: "1px solid var(--border-2)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ fontSize: 12, fontWeight: 650, color: "var(--text)" }}>{c.author === login ? "Вы" : c.author}</span><span style={{ fontSize: 11, color: "var(--muted)" }}>{fmtDate(c.at)}</span></div>
-                <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{c.text}</div>
-              </div>
-            ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 11, background: "var(--surface-2)", border: "1px solid var(--border-2)", marginBottom: 14 }}>
+        <span style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-tint)", color: "var(--accent-2)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></span>
+        <div style={{ minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 650, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.name}</div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{list.length ? `${list.length} комментар.` : "обсуждение файла"}</div></div>
       </div>
-      <textarea style={{ ...input, minHeight: 90, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Написать комментарий…" />
-      <button style={{ ...btn, width: "100%", marginTop: 10, opacity: busy || !text.trim() ? 0.6 : 1 }} disabled={busy || !text.trim()} onClick={send}>{busy ? <><span className="spinner spinner--on-accent" /> Отправляю…</> : "Отправить"}</button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16, maxHeight: "52vh", overflow: "auto", padding: "2px 2px 4px" }}>
+        {loading ? <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 13, padding: 8 }}><span className="spinner" /> Загрузка…</div>
+          : list.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "28px 16px", color: "var(--muted)" }}>
+              <div style={{ width: 46, height: 46, borderRadius: 13, margin: "0 auto 10px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-tint)", color: "var(--accent-2)" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text)" }}>Пока нет комментариев</div>
+              <div style={{ fontSize: 12, marginTop: 3 }}>Напишите первым — переписка видна вам и проверяющему.</div>
+            </div>
+          )
+            : list.map((c, i) => {
+              const mine = c.author === login;
+              return (
+                <div key={i} style={{ display: "flex", flexDirection: mine ? "row-reverse" : "row", alignItems: "flex-end", gap: 8 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: `linear-gradient(135deg,${avatarGrad(c.author)})`, color: "#fff", fontSize: 11.5, fontWeight: 700 }}>{c.author.slice(0, 1).toUpperCase()}</span>
+                  <div style={{ maxWidth: "78%", background: mine ? "var(--accent)" : "var(--surface-2)", color: mine ? "#fff" : "var(--text-2)", border: mine ? "none" : "1px solid var(--border-2)", borderRadius: 14, borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4, padding: "9px 12px" }}>
+                    <div style={{ fontSize: 11, fontWeight: 650, opacity: mine ? 0.85 : 1, color: mine ? "#fff" : "var(--text)", marginBottom: 3 }}>{mine ? "Вы" : c.author}</div>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{c.text}</div>
+                    <div style={{ fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: "right" }}>{fmtDate(c.at)}</div>
+                  </div>
+                </div>
+              );
+            })}
+      </div>
+      <textarea style={{ ...input, minHeight: 84, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} placeholder="Написать комментарий…  (⌘/Ctrl + Enter — отправить)" />
+      <button style={{ ...btn, width: "100%", marginTop: 10, opacity: busy || !text.trim() ? 0.6 : 1 }} disabled={busy || !text.trim()} onClick={send}>{busy ? <><span className="spinner spinner--on-accent" /> Отправляю…</> : <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>Отправить</>}</button>
     </Drawer>
+  );
+}
+
+// ===================== Журнал собственных действий =====================
+type LogEnt = { action: string; target: string; at: string };
+const logMeta = (a: string): { label: string; color: string; icon: React.ReactNode } => {
+  switch (a) {
+    case "submit": return { label: "Сдан отчёт", color: "#10b981", icon: <><path d="M12 5v14M5 12h14" /></> };
+    case "add": return { label: "Добавлен файл", color: "#0ea5e9", icon: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></> };
+    case "delete": return { label: "Удалено", color: "#f43f5e", icon: <><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></> };
+    case "comment": return { label: "Комментарий", color: "#8b5cf6", icon: <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></> };
+    default: return { label: a, color: "var(--muted)", icon: <><circle cx="12" cy="12" r="9" /></> };
+  }
+};
+
+function JournalMine({ login, pw }: { login: string; pw: string }) {
+  const [items, setItems] = useState<LogEnt[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { (async () => { try { setItems(await invoke<LogEnt[]>("sv_mylog", { login, password: pw })); } catch { /* */ } setLoading(false); })(); }, []);
+  return (
+    <>
+      <h1 style={{ ...h1s, marginBottom: 4 }}>Журнал действий</h1>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 20 }}>Ваши действия: что сдавали, меняли, комментировали</div>
+      <div style={{ ...box, padding: 8 }}>
+        {loading ? <div style={{ fontSize: 13, color: "var(--muted)", padding: 20, display: "flex", alignItems: "center", gap: 8 }}><span className="spinner" /> Загрузка…</div>
+          : items.length === 0 ? <div style={{ padding: "40px 20px", textAlign: "center", fontSize: 13.5, color: "var(--muted)" }}>Пока нет записей. Действия появятся здесь автоматически.</div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: 2 }}>
+              {items.map((e, i) => { const m = logMeta(e.action); return (
+                <div key={i} className="sv-item" style={{ cursor: "default" }}>
+                  <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: `color-mix(in srgb, ${m.color} 16%, transparent)`, color: m.color }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{m.icon}</svg></span>
+                  <div style={{ flexGrow: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text)" }}>{m.label}{e.target ? <span style={{ fontWeight: 400, color: "var(--text-2)" }}> · {e.target}</span> : ""}</div>
+                  </div>
+                  <span style={{ fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>{fmtDate(e.at)}</span>
+                </div>
+              ); })}
+            </div>}
+      </div>
+    </>
   );
 }
