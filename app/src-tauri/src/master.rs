@@ -42,7 +42,7 @@ pub struct RoleDef {
 }
 
 fn all_perms() -> Vec<String> {
-    ["submit", "view_own", "view_all", "edit", "delete", "comments", "chat", "view_log", "export"]
+    ["submit", "view_all", "review", "edit", "delete", "comments", "chat", "view_log", "export"]
         .iter().map(|s| s.to_string()).collect()
 }
 
@@ -51,12 +51,12 @@ fn default_roles() -> Vec<RoleDef> {
         RoleDef {
             key: "director".into(),
             name: "Директор".into(),
-            perms: vec!["submit".into(), "view_own".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
+            perms: vec!["submit".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
         },
         RoleDef {
             key: "reviewer".into(),
             name: "Проверяющий".into(),
-            perms: vec!["view_all".into(), "view_own".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
+            perms: vec!["view_all".into(), "review".into(), "edit".into(), "delete".into(), "comments".into(), "export".into(), "chat".into(), "view_log".into()],
         },
     ]
 }
@@ -550,7 +550,19 @@ fn fetch_vault(server: &str, login: &str, password: &str) -> Result<([u8; 32], V
         .decode(lv["enc_vault"].as_str().unwrap_or(""))
         .map_err(|_| "bad vault".to_string())?;
     let json = open_vault(&enc_vault, &enc_key)?;
-    let v: Vault = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let mut v: Vault = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    // права/роль — авторитетно с сервера (мастер может их менять; сейф — лишь снимок при создании)
+    if let Some(arr) = lv["perms"].as_array() {
+        let sp: Vec<String> = arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
+        if !sp.is_empty() {
+            v.my_perms = sp;
+        }
+    }
+    if let Some(rl) = lv["role"].as_str() {
+        if !rl.is_empty() {
+            v.role = rl.to_string();
+        }
+    }
     Ok((enc_key, v))
 }
 
@@ -679,6 +691,11 @@ pub struct ProfileRow {
     pub org: String,
     pub created_at: String,
     pub revoked: bool,
+    pub quota_bytes: i64,
+    pub used_bytes: i64,
+    pub display_name: String,
+    pub perms: Vec<String>,
+    pub last_submit: Option<String>,
 }
 
 pub fn sv_create_profile_impl(
@@ -689,6 +706,8 @@ pub fn sv_create_profile_impl(
     password: String,
     role: String,
     perms: Vec<String>,
+    quota_bytes: i64,
+    display_name: String,
 ) -> Result<ProfileRow, String> {
     if login.trim().is_empty() {
         return Err("Укажите логин".into());
@@ -737,6 +756,8 @@ pub fn sv_create_profile_impl(
         "pub_key": dpub,
         "perms": perms,
         "see_all": see_all,
+        "quota_bytes": quota_bytes,
+        "display_name": display_name.trim(),
     });
     let resp = c
         .post(format!("{server}/auth/create_account"))
@@ -752,6 +773,11 @@ pub fn sv_create_profile_impl(
         org,
         created_at: String::new(),
         revoked: false,
+        quota_bytes,
+        used_bytes: 0,
+        display_name: display_name.trim().to_string(),
+        perms,
+        last_submit: None,
     })
 }
 
@@ -782,8 +808,362 @@ pub fn sv_list_profiles_impl(
             org: j["org"].as_str().unwrap_or("").to_string(),
             created_at: j["created_at"].as_str().unwrap_or("").to_string(),
             revoked: j["revoked"].as_bool().unwrap_or(false),
+            quota_bytes: j["quota_bytes"].as_i64().unwrap_or(0),
+            used_bytes: j["used_bytes"].as_i64().unwrap_or(0),
+            display_name: j["display_name"].as_str().unwrap_or("").to_string(),
+            perms: j["perms"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+            last_submit: j["last_submit"].as_str().map(|s| s.to_string()),
         })
         .collect())
+}
+
+pub fn sv_set_perms_impl(master_login: String, master_password: String, login: String, role: String, perms: Vec<String>) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, _o) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let resp = c
+        .post(format!("{server}/auth/set_perms"))
+        .json(&serde_json::json!({
+            "master_login": master_login.trim(),
+            "master_auth_token": STANDARD.encode(master_tok),
+            "login": login.trim(),
+            "role": role.trim(),
+            "perms": perms,
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct OrgCfg {
+    pub deadline_day: i64,
+    pub review_on: bool,
+    pub default_folders: Vec<String>,
+}
+
+fn parse_orgcfg(v: &serde_json::Value) -> OrgCfg {
+    OrgCfg {
+        deadline_day: v["deadline_day"].as_i64().unwrap_or(0),
+        review_on: v["review_on"].as_bool().unwrap_or(true),
+        default_folders: v["default_folders"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+    }
+}
+
+pub fn sv_orgcfg_get_impl(master_login: String, master_password: String, org: String) -> Result<OrgCfg, String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, my_org) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let target = if org.trim().is_empty() { my_org } else { org.trim().to_string() };
+    let resp = c
+        .post(format!("{server}/auth/orgcfg/get"))
+        .json(&serde_json::json!({
+            "master_login": master_login.trim(),
+            "master_auth_token": STANDARD.encode(master_tok),
+            "org": target,
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(parse_orgcfg(&v))
+}
+
+pub fn sv_orgcfg_set_impl(master_login: String, master_password: String, org: String, deadline_day: i64, review_on: bool, default_folders: Vec<String>) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, my_org) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let target = if org.trim().is_empty() { my_org } else { org.trim().to_string() };
+    let resp = c
+        .post(format!("{server}/auth/orgcfg/set"))
+        .json(&serde_json::json!({
+            "master_login": master_login.trim(),
+            "master_auth_token": STANDARD.encode(master_tok),
+            "org": target,
+            "deadline_day": deadline_day,
+            "review_on": review_on,
+            "default_folders": default_folders,
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_login_policy_get_impl(master_login: String, master_password: String, org: String) -> Result<String, String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, my_org) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let target = if org.trim().is_empty() { my_org } else { org.trim().to_string() };
+    let resp = c.post(format!("{server}/auth/loginpolicy/get"))
+        .json(&serde_json::json!({"master_login": master_login.trim(), "master_auth_token": STANDARD.encode(master_tok), "org": target}))
+        .send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(v["policy"].as_str().unwrap_or("").to_string())
+}
+
+pub fn sv_login_policy_set_impl(master_login: String, master_password: String, org: String, policy: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, my_org) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let target = if org.trim().is_empty() { my_org } else { org.trim().to_string() };
+    let resp = c.post(format!("{server}/auth/loginpolicy/set"))
+        .json(&serde_json::json!({"master_login": master_login.trim(), "master_auth_token": STANDARD.encode(master_tok), "org": target, "policy": policy}))
+        .send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ApRow {
+    pub id: String,
+    pub kind: String,
+    pub requester: String,
+    pub requester_name: String,
+    pub status: String,
+    pub created_at: String,
+    pub decided_by: String,
+    pub used: bool,
+}
+#[derive(Serialize)]
+pub struct ApList {
+    pub incoming: Vec<ApRow>,
+    pub mine: Vec<ApRow>,
+    pub approver: bool,
+}
+fn parse_ap(j: &serde_json::Value) -> ApRow {
+    ApRow {
+        id: j["id"].as_str().unwrap_or("").to_string(),
+        kind: j["kind"].as_str().unwrap_or("").to_string(),
+        requester: j["requester"].as_str().unwrap_or("").to_string(),
+        requester_name: j["requester_name"].as_str().unwrap_or("").to_string(),
+        status: j["status"].as_str().unwrap_or("").to_string(),
+        created_at: j["created_at"].as_str().unwrap_or("").to_string(),
+        decided_by: j["decided_by"].as_str().unwrap_or("").to_string(),
+        used: !j["used_at"].is_null(),
+    }
+}
+fn acct_post(path: &str, login: &str, password: &str, extra: serde_json::Value) -> Result<serde_json::Value, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), password)?;
+    let mut body = serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)});
+    if let (Some(o), Some(ex)) = (body.as_object_mut(), extra.as_object()) {
+        for (k, v) in ex {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    let resp = c.post(format!("{server}{path}")).json(&body).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    resp.json::<serde_json::Value>().map_err(|e| e.to_string())
+}
+
+pub fn sv_approval_request_impl(login: String, password: String, kind: String) -> Result<String, String> {
+    let v = acct_post("/data/approval/request", &login, &password, serde_json::json!({"kind": kind}))?;
+    Ok(v["id"].as_str().unwrap_or("").to_string())
+}
+pub fn sv_approval_list_impl(login: String, password: String) -> Result<ApList, String> {
+    let v = acct_post("/data/approval/list", &login, &password, serde_json::json!({}))?;
+    let inc = v["incoming"].as_array().map(|a| a.iter().map(parse_ap).collect()).unwrap_or_default();
+    let mine = v["mine"].as_array().map(|a| a.iter().map(parse_ap).collect()).unwrap_or_default();
+    Ok(ApList { incoming: inc, mine, approver: v["approver"].as_bool().unwrap_or(false) })
+}
+pub fn sv_approval_decide_impl(login: String, password: String, id: String, approve: bool) -> Result<(), String> {
+    acct_post("/data/approval/decide", &login, &password, serde_json::json!({"id": id, "approve": approve}))?;
+    Ok(())
+}
+pub fn sv_approval_consume_impl(login: String, password: String, id: String) -> Result<(), String> {
+    acct_post("/data/approval/consume", &login, &password, serde_json::json!({"id": id}))?;
+    Ok(())
+}
+pub fn sv_mass_delete_impl(login: String, password: String) -> Result<i64, String> {
+    let v = acct_post("/data/mass_delete", &login, &password, serde_json::json!({}))?;
+    Ok(v["count"].as_i64().unwrap_or(0))
+}
+
+#[derive(Serialize)]
+pub struct ExportResult {
+    pub count: i64,
+    pub failed: i64,
+    pub dir: String,
+}
+// «Скачать всё»: выгрузить ВСЕ файлы организации расшифрованными в папку Downloads (ключом проверяющего)
+pub fn sv_rv_download_all_impl(login: String, password: String) -> Result<ExportResult, String> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|e| e.to_string())?;
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let dir = format!("{home}/Downloads/SecureVault-экспорт-{ts}");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let sani = |s: &str| -> String { let out: String = s.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).collect(); if out.trim().is_empty() { "_".into() } else { out } };
+    let profiles = rv_profiles_impl(login.clone(), password.clone())?;
+    let mut count: i64 = 0;
+    let mut failed: i64 = 0;
+    for p in profiles {
+        let recs = match rv_list_impl(login.clone(), password.clone(), p.login.clone()) { Ok(r) => r, Err(_) => continue };
+        let pdir = format!("{dir}/{}", sani(if p.display_name.is_empty() { &p.login } else { &p.display_name }));
+        for rec in recs {
+            if rec.kind != "file" { continue; }
+            match rv_fetch_bytes(login.trim(), &password, rec.id.trim()) {
+                Ok(bytes) => {
+                    let sub = if rec.folder.is_empty() { pdir.clone() } else { format!("{pdir}/{}", rec.folder.split('/').map(sani).collect::<Vec<_>>().join("/")) };
+                    let _ = std::fs::create_dir_all(&sub);
+                    if std::fs::write(format!("{sub}/{}", sani(&rec.name)), &bytes).is_ok() { count += 1; } else { failed += 1; }
+                }
+                Err(_) => failed += 1,
+            }
+        }
+    }
+    Ok(ExportResult { count, failed, dir })
+}
+
+#[derive(Serialize)]
+pub struct BackupCfg {
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub access_key: String,
+    pub schedule: String,
+    pub has_secret: bool,
+    pub has_pass: bool,
+    pub last_run: String,
+    pub last_status: String,
+    pub last_output: String,
+    pub running: bool,
+}
+fn master_post(path: &str, master_login: &str, master_password: &str, extra: serde_json::Value) -> Result<serde_json::Value, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, master_login.trim(), master_password)?;
+    let mut body = serde_json::json!({"master_login": master_login.trim(), "master_auth_token": STANDARD.encode(tok)});
+    if let (Some(o), Some(ex)) = (body.as_object_mut(), extra.as_object()) {
+        for (k, v) in ex {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    let resp = c.post(format!("{server}{path}")).json(&body).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    resp.json::<serde_json::Value>().map_err(|e| e.to_string())
+}
+pub fn sv_backup_get_impl(master_login: String, master_password: String) -> Result<BackupCfg, String> {
+    let v = master_post("/auth/backup/get", &master_login, &master_password, serde_json::json!({}))?;
+    Ok(BackupCfg {
+        endpoint: v["endpoint"].as_str().unwrap_or("").to_string(),
+        bucket: v["bucket"].as_str().unwrap_or("").to_string(),
+        region: v["region"].as_str().unwrap_or("").to_string(),
+        access_key: v["access_key"].as_str().unwrap_or("").to_string(),
+        schedule: v["schedule"].as_str().unwrap_or("manual").to_string(),
+        has_secret: v["has_secret"].as_bool().unwrap_or(false),
+        has_pass: v["has_pass"].as_bool().unwrap_or(false),
+        last_run: v["last_run"].as_str().unwrap_or("").to_string(),
+        last_status: v["last_status"].as_str().unwrap_or("").to_string(),
+        last_output: v["last_output"].as_str().unwrap_or("").to_string(),
+        running: v["running"].as_bool().unwrap_or(false),
+    })
+}
+#[allow(clippy::too_many_arguments)]
+pub fn sv_backup_set_impl(master_login: String, master_password: String, endpoint: String, bucket: String, region: String, access_key: String, secret_key: String, repo_pass: String, schedule: String) -> Result<(), String> {
+    master_post("/auth/backup/set", &master_login, &master_password, serde_json::json!({"endpoint": endpoint, "bucket": bucket, "region": region, "access_key": access_key, "secret_key": secret_key, "repo_pass": repo_pass, "schedule": schedule}))?;
+    Ok(())
+}
+pub fn sv_backup_run_impl(master_login: String, master_password: String) -> Result<(), String> {
+    master_post("/auth/backup/run", &master_login, &master_password, serde_json::json!({}))?;
+    Ok(())
+}
+
+pub fn sv_my_orgcfg_impl(login: String, password: String) -> Result<OrgCfg, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c
+        .post(format!("{server}/data/orgcfg"))
+        .json(&serde_json::json!({
+            "login": login.trim(),
+            "auth_token": STANDARD.encode(tok),
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(parse_orgcfg(&v))
+}
+
+pub fn sv_set_name_impl(master_login: String, master_password: String, login: String, display_name: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, _o) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let resp = c
+        .post(format!("{server}/auth/set_name"))
+        .json(&serde_json::json!({
+            "master_login": master_login.trim(),
+            "master_auth_token": STANDARD.encode(master_tok),
+            "login": login.trim(),
+            "display_name": display_name.trim(),
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct QuotaInfo {
+    pub quota_bytes: i64,
+    pub used_bytes: i64,
+}
+
+pub fn sv_set_quota_impl(master_login: String, master_password: String, login: String, quota_bytes: i64) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (master_tok, _o) = auth_token_and_org(&c, &server, master_login.trim(), &master_password)?;
+    let resp = c
+        .post(format!("{server}/auth/set_quota"))
+        .json(&serde_json::json!({
+            "master_login": master_login.trim(),
+            "master_auth_token": STANDARD.encode(master_tok),
+            "login": login.trim(),
+            "quota_bytes": quota_bytes.max(0),
+        }))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_my_quota_impl(login: String, password: String) -> Result<QuotaInfo, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c
+        .post(format!("{server}/data/myquota"))
+        .json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)}))
+        .send()
+        .map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(QuotaInfo { quota_bytes: j["quota_bytes"].as_i64().unwrap_or(0), used_bytes: j["used_bytes"].as_i64().unwrap_or(0) })
 }
 
 // мастер сбрасывает пароль профиля: перевыдаёт ячейку с новым паролем (org/role сохраняются)
@@ -1206,8 +1586,169 @@ pub async fn sv_renew_license(server: String, login: String, password: String, l
 }
 
 #[tauri::command]
-pub async fn sv_create_profile(master_login: String, master_password: String, org: String, login: String, password: String, role: String, perms: Vec<String>) -> Result<ProfileRow, String> {
-    tauri::async_runtime::spawn_blocking(move || sv_create_profile_impl(master_login, master_password, org, login, password, role, perms))
+pub async fn sv_create_profile(master_login: String, master_password: String, org: String, login: String, password: String, role: String, perms: Vec<String>, quota_bytes: i64, display_name: String) -> Result<ProfileRow, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_create_profile_impl(master_login, master_password, org, login, password, role, perms, quota_bytes, display_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_set_name(master_login: String, master_password: String, login: String, display_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_set_name_impl(master_login, master_password, login, display_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_set_perms(master_login: String, master_password: String, login: String, role: String, perms: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_set_perms_impl(master_login, master_password, login, role, perms))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_orgcfg_get(master_login: String, master_password: String, org: String) -> Result<OrgCfg, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_orgcfg_get_impl(master_login, master_password, org))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_orgcfg_set(master_login: String, master_password: String, org: String, deadline_day: i64, review_on: bool, default_folders: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_orgcfg_set_impl(master_login, master_password, org, deadline_day, review_on, default_folders))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_my_orgcfg(login: String, password: String) -> Result<OrgCfg, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_my_orgcfg_impl(login, password))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_login_policy_get(master_login: String, master_password: String, org: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_login_policy_get_impl(master_login, master_password, org))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_login_policy_set(master_login: String, master_password: String, org: String, policy: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_login_policy_set_impl(master_login, master_password, org, policy))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_approval_request(login: String, password: String, kind: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_approval_request_impl(login, password, kind)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_approval_list(login: String, password: String) -> Result<ApList, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_approval_list_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_approval_decide(login: String, password: String, id: String, approve: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_approval_decide_impl(login, password, id, approve)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_approval_consume(login: String, password: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_approval_consume_impl(login, password, id)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_rv_download_all(login: String, password: String) -> Result<ExportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_rv_download_all_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_mass_delete(login: String, password: String) -> Result<i64, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_mass_delete_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_backup_get(master_login: String, master_password: String) -> Result<BackupCfg, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_backup_get_impl(master_login, master_password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_backup_set(master_login: String, master_password: String, endpoint: String, bucket: String, region: String, access_key: String, secret_key: String, repo_pass: String, schedule: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_backup_set_impl(master_login, master_password, endpoint, bucket, region, access_key, secret_key, repo_pass, schedule)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_backup_run(master_login: String, master_password: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_backup_run_impl(master_login, master_password)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_rv_activity(login: String, password: String) -> Result<Vec<RvActivity>, String> {
+    tauri::async_runtime::spawn_blocking(move || rv_activity_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+pub struct Notif {
+    pub id: String,
+    pub kind: String,
+    pub rid: String,
+    pub actor: String,
+    pub text: String,
+    pub at: String,
+    pub read: bool,
+}
+
+#[derive(Serialize)]
+pub struct NotifList {
+    pub items: Vec<Notif>,
+    pub unread: i64,
+}
+
+pub fn notifs_impl(login: String, password: String) -> Result<NotifList, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/notifs")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let items = j["items"].as_array().cloned().unwrap_or_default().into_iter().map(|n| Notif {
+        id: n["id"].as_str().unwrap_or("").to_string(),
+        kind: n["kind"].as_str().unwrap_or("").to_string(),
+        rid: n["rid"].as_str().unwrap_or("").to_string(),
+        actor: n["actor"].as_str().unwrap_or("").to_string(),
+        text: n["text"].as_str().unwrap_or("").to_string(),
+        at: n["at"].as_str().unwrap_or("").to_string(),
+        read: n["read"].as_bool().unwrap_or(false),
+    }).collect();
+    Ok(NotifList { items, unread: j["unread"].as_i64().unwrap_or(0) })
+}
+
+pub fn notifs_read_impl(login: String, password: String, id: String, all: bool) -> Result<(), String> {
+    rv_post_ok("/data/notifs/read", &login, &password, serde_json::json!({"id": id, "all": all}))
+}
+
+#[tauri::command]
+pub async fn sv_notifs(login: String, password: String) -> Result<NotifList, String> {
+    tauri::async_runtime::spawn_blocking(move || notifs_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_notifs_read(login: String, password: String, id: String, all: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || notifs_read_impl(login, password, id, all)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn sv_notify(app: tauri::AppHandle, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+#[tauri::command]
+pub async fn sv_set_quota(master_login: String, master_password: String, login: String, quota_bytes: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_set_quota_impl(master_login, master_password, login, quota_bytes))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv_my_quota(login: String, password: String) -> Result<QuotaInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_my_quota_impl(login, password))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1263,6 +1804,29 @@ pub struct DirRec {
     pub folder: String,
     pub comments: i64,
     pub at: String,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+pub struct DirVersion {
+    pub id: String,
+    pub name: String,
+    pub size: i64,
+    pub submitter: String,
+    pub at: String,
+    pub current: bool,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+pub struct DirTrash {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub size: i64,
+    pub folder: String,
+    pub at: String,
+    pub deleted_at: String,
 }
 
 fn open_in_os(path: &str) -> Result<(), String> {
@@ -1367,6 +1931,155 @@ pub fn sv_dir_submit_impl(login: String, password: String, folder: String, title
     Ok(j["id"].as_str().unwrap_or("").to_string())
 }
 
+// замена файла новой версией: старая сохраняется как версия (replaces)
+pub fn sv_dir_replace_impl(login: String, password: String, replaces: String, folder: String, title: String, kind: String, content_b64: String) -> Result<String, String> {
+    let server = default_server();
+    let c = http()?;
+    let (_enc, v) = fetch_vault(&server, login.trim(), &password)?;
+    if v.master_public.is_empty() {
+        return Err("У профиля нет ключа шифрования".into());
+    }
+    let data = STANDARD.decode(content_b64.trim()).map_err(|_| "bad content".to_string())?;
+    let (tok, _org) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let mut recips = recipients_for(&c, &server, login.trim(), STANDARD.encode(&tok), "");
+    if !recips.iter().any(|p| p == &v.master_public) {
+        recips.push(v.master_public.clone());
+    }
+    let ct = crate::crypto::encrypt(&data, &recips)?;
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("login", login.trim().to_string())
+        .text("auth_token", STANDARD.encode(tok))
+        .text("folder", folder)
+        .text("title", title)
+        .text("kind", kind)
+        .text("replaces", replaces.trim().to_string())
+        .part("file", reqwest::blocking::multipart::Part::bytes(ct).file_name("blob"));
+    let resp = c.post(format!("{server}/data/submit")).multipart(form).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка отправки".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(j["id"].as_str().unwrap_or("").to_string())
+}
+
+pub fn sv_dir_versions_impl(login: String, password: String, id: String) -> Result<Vec<DirVersion>, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/versions")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().map_err(|e| e.to_string())?;
+    Ok(arr.into_iter().map(|j| DirVersion {
+        id: j["id"].as_str().unwrap_or("").to_string(),
+        name: j["name"].as_str().unwrap_or("").to_string(),
+        size: j["size"].as_i64().unwrap_or(0),
+        submitter: j["submitter"].as_str().unwrap_or("").to_string(),
+        at: j["at"].as_str().unwrap_or("").to_string(),
+        current: j["current"].as_bool().unwrap_or(false),
+        status: j["status"].as_str().unwrap_or("").to_string(),
+    }).collect())
+}
+
+pub fn sv_dir_restore_version_impl(login: String, password: String, id: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/restore_version")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_trash_impl(login: String, password: String) -> Result<Vec<DirTrash>, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/trash")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let arr: Vec<serde_json::Value> = resp.json().map_err(|e| e.to_string())?;
+    Ok(arr.into_iter().map(|j| DirTrash {
+        id: j["id"].as_str().unwrap_or("").to_string(),
+        kind: j["kind"].as_str().unwrap_or("").to_string(),
+        name: j["name"].as_str().unwrap_or("").to_string(),
+        size: j["size"].as_i64().unwrap_or(0),
+        folder: j["folder"].as_str().unwrap_or("").to_string(),
+        at: j["at"].as_str().unwrap_or("").to_string(),
+        deleted_at: j["deleted_at"].as_str().unwrap_or("").to_string(),
+    }).collect())
+}
+
+pub fn sv_dir_restore_impl(login: String, password: String, id: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/restore")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_purge_impl(login: String, password: String, id: String, all: bool) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/purge")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim(), "all": all})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_rename_impl(login: String, password: String, id: String, name: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/rename")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim(), "name": name.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_move_impl(login: String, password: String, id: String, folder: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/move")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim(), "folder": folder})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_folder_move_impl(login: String, password: String, old: String, new_path: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/folder_move")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "old": old, "new": new_path})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn sv_dir_copy_impl(login: String, password: String, id: String, folder: String) -> Result<String, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/copy")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim(), "folder": folder})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(j["id"].as_str().unwrap_or("").to_string())
+}
+
 pub fn sv_dir_list_impl(login: String, password: String) -> Result<Vec<DirRec>, String> {
     let server = default_server();
     let c = http()?;
@@ -1384,6 +2097,7 @@ pub fn sv_dir_list_impl(login: String, password: String) -> Result<Vec<DirRec>, 
         folder: j["folder"].as_str().unwrap_or("").to_string(),
         comments: j["comments"].as_i64().unwrap_or(0),
         at: j["at"].as_str().unwrap_or("").to_string(),
+        status: j["status"].as_str().unwrap_or("").to_string(),
     }).collect())
 }
 
@@ -1431,9 +2145,64 @@ pub fn sv_dir_delete_impl(login: String, password: String, id: String) -> Result
     Ok(())
 }
 
+pub fn sv_dir_submit_review_impl(login: String, password: String, id: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/submit_review")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sv_dir_submit_review(login: String, password: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_submit_review_impl(login, password, id)).await.map_err(|e| e.to_string())?
+}
 #[tauri::command]
 pub async fn sv_dir_submit(login: String, password: String, folder: String, title: String, kind: String, content_b64: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || sv_dir_submit_impl(login, password, folder, title, kind, content_b64)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_replace(login: String, password: String, replaces: String, folder: String, title: String, kind: String, content_b64: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_replace_impl(login, password, replaces, folder, title, kind, content_b64)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_versions(login: String, password: String, id: String) -> Result<Vec<DirVersion>, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_versions_impl(login, password, id)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_restore_version(login: String, password: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_restore_version_impl(login, password, id)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_trash(login: String, password: String) -> Result<Vec<DirTrash>, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_trash_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_restore(login: String, password: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_restore_impl(login, password, id)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_purge(login: String, password: String, id: String, all: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_purge_impl(login, password, id, all)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_rename(login: String, password: String, id: String, name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_rename_impl(login, password, id, name)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_move(login: String, password: String, id: String, folder: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_move_impl(login, password, id, folder)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_folder_move(login: String, password: String, old: String, new_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_folder_move_impl(login, password, old, new_path)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_dir_copy(login: String, password: String, id: String, folder: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sv_dir_copy_impl(login, password, id, folder)).await.map_err(|e| e.to_string())?
 }
 
 pub fn sv_dir_folders_impl(login: String, password: String) -> Result<Vec<String>, String> {
@@ -1551,9 +2320,38 @@ fn recipients_for(c: &reqwest::blocking::Client, server: &str, login: &str, auth
 #[derive(Serialize)]
 pub struct RvProfile {
     pub login: String,
+    pub display_name: String,
     pub count: i64,
+    pub bytes: i64,
+    pub quota_bytes: i64,
     pub last_at: String,
     pub revoked: bool,
+    pub review: i64,
+    pub fix: i64,
+}
+
+#[derive(Serialize)]
+pub struct RvQueue {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub size: i64,
+    pub folder: String,
+    pub owner_login: String,
+    pub owner_name: String,
+    pub submitter: String,
+    pub comments: i64,
+    pub at: String,
+}
+
+#[derive(Serialize)]
+pub struct RvActivity {
+    pub actor: String,
+    pub actor_name: String,
+    pub action: String,
+    pub target: String,
+    pub at: String,
+    pub rid: String,
 }
 
 #[derive(Serialize)]
@@ -1566,6 +2364,7 @@ pub struct RvRec {
     pub submitter: String,
     pub comments: i64,
     pub at: String,
+    pub status: String,
 }
 
 #[derive(Serialize)]
@@ -1582,8 +2381,15 @@ pub struct RvRecent {
 #[derive(Serialize)]
 pub struct Comment {
     pub author: String,
+    pub author_name: String,
     pub text: String,
     pub at: String,
+}
+
+#[derive(Serialize)]
+pub struct CommentList {
+    pub comments: Vec<Comment>,
+    pub last_read: String,
 }
 
 fn rv_post_array(path: &str, login: &str, password: &str, extra: serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
@@ -1607,9 +2413,57 @@ pub fn rv_profiles_impl(login: String, password: String) -> Result<Vec<RvProfile
     let arr = rv_post_array("/data/reviewer/profiles", &login, &password, serde_json::json!({}))?;
     Ok(arr.into_iter().map(|j| RvProfile {
         login: j["login"].as_str().unwrap_or("").to_string(),
+        display_name: j["display_name"].as_str().unwrap_or("").to_string(),
         count: j["count"].as_i64().unwrap_or(0),
+        bytes: j["bytes"].as_i64().unwrap_or(0),
+        quota_bytes: j["quota_bytes"].as_i64().unwrap_or(0),
         last_at: j["last_at"].as_str().unwrap_or("").to_string(),
         revoked: j["revoked"].as_bool().unwrap_or(false),
+        review: j["review"].as_i64().unwrap_or(0),
+        fix: j["fix"].as_i64().unwrap_or(0),
+    }).collect())
+}
+
+pub fn rv_activity_impl(login: String, password: String) -> Result<Vec<RvActivity>, String> {
+    let arr = rv_post_array("/data/reviewer/activity", &login, &password, serde_json::json!({}))?;
+    Ok(arr.into_iter().map(|j| RvActivity {
+        actor: j["actor"].as_str().unwrap_or("").to_string(),
+        actor_name: j["actor_name"].as_str().unwrap_or("").to_string(),
+        action: j["action"].as_str().unwrap_or("").to_string(),
+        target: j["target"].as_str().unwrap_or("").to_string(),
+        at: j["at"].as_str().unwrap_or("").to_string(),
+        rid: j["rid"].as_str().unwrap_or("").to_string(),
+    }).collect())
+}
+
+fn rv_post_ok(path: &str, login: &str, password: &str, extra: serde_json::Value) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), password)?;
+    let mut body = serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)});
+    if let (Some(obj), Some(ex)) = (body.as_object_mut(), extra.as_object()) {
+        for (k, v) in ex { obj.insert(k.clone(), v.clone()); }
+    }
+    let resp = c.post(format!("{server}{path}")).json(&body).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+pub fn rv_queue_impl(login: String, password: String) -> Result<Vec<RvQueue>, String> {
+    let arr = rv_post_array("/data/reviewer/queue", &login, &password, serde_json::json!({}))?;
+    Ok(arr.into_iter().map(|j| RvQueue {
+        id: j["id"].as_str().unwrap_or("").to_string(),
+        kind: j["kind"].as_str().unwrap_or("").to_string(),
+        name: j["name"].as_str().unwrap_or("").to_string(),
+        size: j["size"].as_i64().unwrap_or(0),
+        folder: j["folder"].as_str().unwrap_or("").to_string(),
+        owner_login: j["owner_login"].as_str().unwrap_or("").to_string(),
+        owner_name: j["owner_name"].as_str().unwrap_or("").to_string(),
+        submitter: j["submitter"].as_str().unwrap_or("").to_string(),
+        comments: j["comments"].as_i64().unwrap_or(0),
+        at: j["at"].as_str().unwrap_or("").to_string(),
     }).collect())
 }
 
@@ -1624,6 +2478,7 @@ pub fn rv_list_impl(login: String, password: String, owner: String) -> Result<Ve
         submitter: j["submitter"].as_str().unwrap_or("").to_string(),
         comments: j["comments"].as_i64().unwrap_or(0),
         at: j["at"].as_str().unwrap_or("").to_string(),
+        status: j["status"].as_str().unwrap_or("").to_string(),
     }).collect())
 }
 
@@ -1709,8 +2564,19 @@ pub fn rv_delete_impl(login: String, password: String, id: String) -> Result<(),
     Ok(())
 }
 
+pub fn rv_set_status_impl(login: String, password: String, id: String, status: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/reviewer/status")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "id": id.trim(), "status": status.trim()})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
 // комментарии (работают для директора и проверяющего — расшифровка своим ключом)
-pub fn cm_list_impl(login: String, password: String, record_id: String) -> Result<Vec<Comment>, String> {
+pub fn cm_list_impl(login: String, password: String, record_id: String) -> Result<CommentList, String> {
     let server = default_server();
     let c = http()?;
     let (_enc, v) = fetch_vault(&server, login.trim(), &password)?;
@@ -1719,10 +2585,13 @@ pub fn cm_list_impl(login: String, password: String, record_id: String) -> Resul
     if !resp.status().is_success() {
         return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
     }
-    let arr: Vec<serde_json::Value> = resp.json().map_err(|e| e.to_string())?;
+    let v2: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let last_read = v2["last_read"].as_str().unwrap_or("").to_string();
+    let arr: Vec<serde_json::Value> = v2["items"].as_array().cloned().unwrap_or_default();
     let mut out = vec![];
     for j in arr {
         let author = j["author"].as_str().unwrap_or("").to_string();
+        let author_name = j["author_name"].as_str().unwrap_or("").to_string();
         let at = j["at"].as_str().unwrap_or("").to_string();
         let blob_b64 = j["blob"].as_str().unwrap_or("");
         let text = match STANDARD.decode(blob_b64) {
@@ -1732,9 +2601,9 @@ pub fn cm_list_impl(login: String, password: String, record_id: String) -> Resul
             },
             Err(_) => "[повреждён]".to_string(),
         };
-        out.push(Comment { author, text, at });
+        out.push(Comment { author, author_name, text, at });
     }
-    Ok(out)
+    Ok(CommentList { comments: out, last_read })
 }
 
 pub fn cm_add_impl(login: String, password: String, record_id: String, owner: String, text: String) -> Result<(), String> {
@@ -1753,6 +2622,104 @@ pub fn cm_add_impl(login: String, password: String, record_id: String, owner: St
     Ok(())
 }
 
+// настройки пользователя: зашифрованы своим ключом, лежат на сервере (переживают переустановку)
+pub fn prefs_get_impl(login: String, password: String) -> Result<String, String> {
+    let server = default_server();
+    let c = http()?;
+    let (_enc, v) = fetch_vault(&server, login.trim(), &password)?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/prefs/get")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let b64 = j["blob"].as_str().unwrap_or("");
+    if b64.is_empty() {
+        return Ok(String::new());
+    }
+    let ct = STANDARD.decode(b64).map_err(|_| "bad blob".to_string())?;
+    let pt = crate::crypto::decrypt(&ct, v.master_secret.trim())?;
+    Ok(String::from_utf8_lossy(&pt).to_string())
+}
+
+pub fn prefs_set_impl(login: String, password: String, json: String) -> Result<(), String> {
+    let server = default_server();
+    let c = http()?;
+    let (_enc, v) = fetch_vault(&server, login.trim(), &password)?;
+    if v.master_public.is_empty() {
+        return Err("У профиля нет ключа шифрования".into());
+    }
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let ct = crate::crypto::encrypt(json.as_bytes(), &[v.master_public.clone()])?;
+    let resp = c.post(format!("{server}/data/prefs/set")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok), "blob": STANDARD.encode(ct)})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sv_prefs_get(login: String, password: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || prefs_get_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_prefs_set(login: String, password: String, json: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || prefs_set_impl(login, password, json)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+pub struct DiskInfo { pub total: u64, pub free: u64, pub used: u64 }
+
+pub fn server_disk_impl(login: String, password: String) -> Result<DiskInfo, String> {
+    let server = default_server();
+    let c = http()?;
+    let (tok, _o) = auth_token_and_org(&c, &server, login.trim(), &password)?;
+    let resp = c.post(format!("{server}/data/diskinfo")).json(&serde_json::json!({"login": login.trim(), "auth_token": STANDARD.encode(tok)})).send().map_err(|e| format!("Сервер недоступен: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(resp.text().unwrap_or_else(|_| "ошибка".into()));
+    }
+    let j: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(DiskInfo { total: j["total"].as_u64().unwrap_or(0), free: j["free"].as_u64().unwrap_or(0), used: j["used"].as_u64().unwrap_or(0) })
+}
+
+#[derive(Serialize)]
+pub struct NetStatus { pub server: bool, pub ms: u64, pub iface: String }
+
+#[cfg(target_os = "macos")]
+fn detect_iface() -> String {
+    let dev = std::process::Command::new("route").args(["-n", "get", "default"]).output().ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().find(|l| l.trim_start().starts_with("interface:")).map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string()))
+        .unwrap_or_default();
+    if dev.is_empty() { return String::new(); }
+    let out = std::process::Command::new("networksetup").args(["-getairportnetwork", &dev]).output().ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+    if let Some(idx) = out.find("Current Wi-Fi Network:") {
+        let ssid = out[idx + "Current Wi-Fi Network:".len()..].trim();
+        return format!("Wi-Fi · {ssid}");
+    }
+    "Проводная".to_string()
+}
+#[cfg(not(target_os = "macos"))]
+fn detect_iface() -> String { String::new() }
+
+pub fn net_status_impl() -> NetStatus {
+    let iface = detect_iface();
+    let server = default_server();
+    let start = std::time::Instant::now();
+    let reachable = http().ok().and_then(|c| c.get(format!("{server}/health")).send().ok()).map(|r| r.status().is_success()).unwrap_or(false);
+    let ms = start.elapsed().as_millis() as u64;
+    NetStatus { server: reachable, ms, iface }
+}
+
+#[tauri::command]
+pub async fn sv_server_disk(login: String, password: String) -> Result<DiskInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || server_disk_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_net_status() -> Result<NetStatus, String> {
+    tauri::async_runtime::spawn_blocking(net_status_impl).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn sv_rv_profiles(login: String, password: String) -> Result<Vec<RvProfile>, String> {
     tauri::async_runtime::spawn_blocking(move || rv_profiles_impl(login, password)).await.map_err(|e| e.to_string())?
@@ -1764,6 +2731,18 @@ pub async fn sv_rv_list(login: String, password: String, owner: String) -> Resul
 #[tauri::command]
 pub async fn sv_rv_recent(login: String, password: String) -> Result<Vec<RvRecent>, String> {
     tauri::async_runtime::spawn_blocking(move || rv_recent_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_rv_queue(login: String, password: String) -> Result<Vec<RvQueue>, String> {
+    tauri::async_runtime::spawn_blocking(move || rv_queue_impl(login, password)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_rv_rename(login: String, password: String, id: String, name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || rv_post_ok("/data/reviewer/rename", &login, &password, serde_json::json!({"id": id, "name": name}))).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_rv_move(login: String, password: String, id: String, folder: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || rv_post_ok("/data/reviewer/move", &login, &password, serde_json::json!({"id": id, "folder": folder}))).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn sv_rv_open(login: String, password: String, id: String) -> Result<String, String> {
@@ -1782,7 +2761,11 @@ pub async fn sv_rv_delete(login: String, password: String, id: String) -> Result
     tauri::async_runtime::spawn_blocking(move || rv_delete_impl(login, password, id)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn sv_cm_list(login: String, password: String, record_id: String) -> Result<Vec<Comment>, String> {
+pub async fn sv_rv_set_status(login: String, password: String, id: String, status: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || rv_set_status_impl(login, password, id, status)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn sv_cm_list(login: String, password: String, record_id: String) -> Result<CommentList, String> {
     tauri::async_runtime::spawn_blocking(move || cm_list_impl(login, password, record_id)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
@@ -1795,6 +2778,7 @@ pub struct MyLogEnt {
     pub action: String,
     pub target: String,
     pub at: String,
+    pub rid: String,
 }
 
 pub fn mylog_impl(login: String, password: String) -> Result<Vec<MyLogEnt>, String> {
@@ -1803,6 +2787,7 @@ pub fn mylog_impl(login: String, password: String) -> Result<Vec<MyLogEnt>, Stri
         action: j["action"].as_str().unwrap_or("").to_string(),
         target: j["target"].as_str().unwrap_or("").to_string(),
         at: j["at"].as_str().unwrap_or("").to_string(),
+        rid: j["rid"].as_str().unwrap_or("").to_string(),
     }).collect())
 }
 
@@ -1870,7 +2855,7 @@ mod tests {
         let dlogin = format!("d{}", std::process::id());
         // создаём во второй организации
         sv_add_org_impl(ml.clone(), "masterpass".into(), "Орг Два".into()).unwrap();
-        let p = sv_create_profile_impl(ml.clone(), "masterpass".into(), "Орг Два".into(), dlogin.clone(), "dirpass1".into(), "director".into(), vec!["submit".into(), "view_own".into()]).unwrap();
+        let p = sv_create_profile_impl(ml.clone(), "masterpass".into(), "Орг Два".into(), dlogin.clone(), "dirpass1".into(), "director".into(), vec!["submit".into(), "view_own".into()], 0, String::new()).unwrap();
         println!("создан профиль {} role={} org={}", p.login, p.role, p.org);
         assert_eq!(p.org, "Орг Два");
         let list = sv_list_profiles_impl(ml.clone(), "masterpass".into()).unwrap();
